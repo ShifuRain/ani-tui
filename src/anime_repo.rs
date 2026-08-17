@@ -1,10 +1,10 @@
 /// An identifier for an anime/episode that's addressable across any source. Formats as
-/// `<prefix:raw>`, e.g. `<GLP-1:some-anime#1>`. `prefix` identifies which
+/// `<prefix:raw>`, e.g. `<ADB-1:some-anime#1>`. `prefix` identifies which
 /// [`AnimeRepository`] produced it (see [`AnimeRepository::prefix`]); `raw` is an opaque
 /// string that only that source's implementation understands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlobalId {
-    /// Identifies which source this ID belongs to, e.g. `"GLP-1"`
+    /// Identifies which source this ID belongs to, e.g. `"ADB-1"`
     pub prefix: String,
     /// Opaque, source-defined identifier
     pub raw: String,
@@ -62,7 +62,7 @@ pub struct Detail {
 /// see [`crate::registry::Registry`].
 #[async_trait]
 pub trait AnimeRepository: Send + Sync {
-    /// A short, stable prefix identifying this source in a [`GlobalId`], e.g. `"GLP-1"`.
+    /// A short, stable prefix identifying this source in a [`GlobalId`], e.g. `"ADB-1"`.
     /// Must be unique across all registered sources.
     fn prefix(&self) -> &'static str;
 
@@ -102,10 +102,10 @@ mod tests {
     #[test]
     fn global_id_round_trips() {
         let id = GlobalId {
-            prefix: "GLP-1".to_string(),
+            prefix: "ADB-1".to_string(),
             raw: "some-anime#1".to_string(),
         };
-        assert_eq!(id.as_repr(), "<GLP-1:some-anime#1>");
+        assert_eq!(id.as_repr(), "<ADB-1:some-anime#1>");
         assert_eq!(GlobalId::from_repr(&id.as_repr()).as_ref(), Some(&id));
     }
 

@@ -53,28 +53,28 @@ mod tests {
 
     #[test]
     fn parses_ep_count() {
-        let args = Args::try_parse_from(["ani-tui", "ep-count", "<GLP-1:x#1>"]).unwrap();
+        let args = Args::try_parse_from(["ani-tui", "ep-count", "<ADB-1:x#1>"]).unwrap();
         match args.command {
-            Some(Commands::EpCount { ident }) => assert_eq!(ident, "<GLP-1:x#1>"),
+            Some(Commands::EpCount { ident }) => assert_eq!(ident, "<ADB-1:x#1>"),
             other => panic!("expected EpCount, got {other:?}"),
         }
     }
 
     #[test]
     fn parses_detail() {
-        let args = Args::try_parse_from(["ani-tui", "detail", "<GLP-1:x#1>"]).unwrap();
+        let args = Args::try_parse_from(["ani-tui", "detail", "<ADB-1:x#1>"]).unwrap();
         match args.command {
-            Some(Commands::Detail { ident }) => assert_eq!(ident, "<GLP-1:x#1>"),
+            Some(Commands::Detail { ident }) => assert_eq!(ident, "<ADB-1:x#1>"),
             other => panic!("expected Detail, got {other:?}"),
         }
     }
 
     #[test]
     fn parses_watch_with_episode_number() {
-        let args = Args::try_parse_from(["ani-tui", "watch", "<GLP-1:x#1>", "3"]).unwrap();
+        let args = Args::try_parse_from(["ani-tui", "watch", "<ADB-1:x#1>", "3"]).unwrap();
         match args.command {
             Some(Commands::Watch { ident, ep }) => {
-                assert_eq!(ident, "<GLP-1:x#1>");
+                assert_eq!(ident, "<ADB-1:x#1>");
                 assert_eq!(ep, 3);
             }
             other => panic!("expected Watch, got {other:?}"),
@@ -83,7 +83,7 @@ mod tests {
 
     #[test]
     fn rejects_watch_missing_episode_number() {
-        assert!(Args::try_parse_from(["ani-tui", "watch", "<GLP-1:x#1>"]).is_err());
+        assert!(Args::try_parse_from(["ani-tui", "watch", "<ADB-1:x#1>"]).is_err());
     }
 
     #[test]

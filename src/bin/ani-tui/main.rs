@@ -139,7 +139,7 @@ mod tests {
     async fn rejects_episode_number_zero() {
         let registry = Registry::new();
         let command = Commands::Watch {
-            ident: "<GLP-1:some-anime#1>".to_string(),
+            ident: "<ADB-1:some-anime#1>".to_string(),
             ep: 0,
         };
 

@@ -268,7 +268,7 @@ mod tests {
             "no results yet, focus shouldn't move"
         );
 
-        app.results.push(sample_result("GLP-1", "x#1", "Title"));
+        app.results.push(sample_result("ADB-1", "x#1", "Title"));
         app.on_key(key(KeyCode::Down));
         assert_eq!(app.focus, Focus::Results);
     }
@@ -277,8 +277,8 @@ mod tests {
     fn results_navigation_clamps_at_bounds() {
         let mut app = App::new();
         app.focus = Focus::Results;
-        app.results.push(sample_result("GLP-1", "x#1", "A"));
-        app.results.push(sample_result("GLP-1", "x#2", "B"));
+        app.results.push(sample_result("ADB-1", "x#1", "A"));
+        app.results.push(sample_result("ADB-1", "x#2", "B"));
 
         app.on_key(key(KeyCode::Up));
         assert_eq!(app.results_selected, 0, "shouldn't go below 0");
@@ -301,12 +301,12 @@ mod tests {
     fn enter_on_results_sets_pending_detail() {
         let mut app = App::new();
         app.focus = Focus::Results;
-        app.results.push(sample_result("GLP-1", "x#1", "A"));
+        app.results.push(sample_result("ADB-1", "x#1", "A"));
         app.on_key(key(KeyCode::Enter));
         assert_eq!(
             app.pending_detail,
             Some(GlobalId {
-                prefix: "GLP-1".to_string(),
+                prefix: "ADB-1".to_string(),
                 raw: "x#1".to_string(),
             })
         );
@@ -317,7 +317,7 @@ mod tests {
         let mut app = App::new();
         app.loading = true;
         app.on_app_event(AppEvent::SearchResults(vec![
-            ("GLP-1", Ok(vec![sample_result("GLP-1", "x#1", "A")])),
+            ("ADB-1", Ok(vec![sample_result("ADB-1", "x#1", "A")])),
             (
                 "ADB-1",
                 Err(anime_repo::AnimeRepositoryError::DatasourceError),
@@ -344,7 +344,7 @@ mod tests {
             vec![Episode {
                 title: "Episode 1".to_string(),
                 id: GlobalId {
-                    prefix: "GLP-1".to_string(),
+                    prefix: "ADB-1".to_string(),
                     raw: "x#1".to_string(),
                 },
             }],
@@ -363,7 +363,7 @@ mod tests {
         app.episodes.push(Episode {
             title: "Episode 1".to_string(),
             id: GlobalId {
-                prefix: "GLP-1".to_string(),
+                prefix: "ADB-1".to_string(),
                 raw: "x#1".to_string(),
             },
         });
