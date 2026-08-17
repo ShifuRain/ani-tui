@@ -1,14 +1,25 @@
+mod tui;
+
 use ani_tui::{anime_repo::GlobalId, cli_args::*, registry::Registry};
 
 use clap::Parser;
-use std::process::{Command, ExitCode, Stdio};
+use std::process::{ExitCode, Stdio};
+use std::sync::Arc;
+use tokio::process::Command;
 
 #[tokio::main]
 async fn main() -> ExitCode {
     let args = Args::parse();
     let registry = Registry::new();
 
-    if let Err(message) = run(args, &registry).await {
+    let result = match args.command {
+        Some(command) => run(command, &registry).await,
+        None => tui::run(Arc::new(registry))
+            .await
+            .map_err(|e| e.to_string()),
+    };
+
+    if let Err(message) = result {
         eprintln!("Error: {message}");
         return ExitCode::FAILURE;
     }
@@ -16,8 +27,8 @@ async fn main() -> ExitCode {
 }
 
 /// Runs the requested subcommand, returning a user-facing error message on failure.
-async fn run(args: Args, registry: &Registry) -> Result<(), String> {
-    match args.command {
+async fn run(command: Commands, registry: &Registry) -> Result<(), String> {
+    match command {
         Commands::Search { title } => {
             let mut any_results = false;
 
@@ -98,7 +109,7 @@ async fn run(args: Args, registry: &Registry) -> Result<(), String> {
                 .stderr(Stdio::piped())
                 .spawn()
                 .map_err(|_| "could not launch mpv: is it installed and on PATH?")?;
-            mpv.wait().map_err(|_| "mpv exited unexpectedly")?;
+            mpv.wait().await.map_err(|_| "mpv exited unexpectedly")?;
         }
     }
 
@@ -114,14 +125,12 @@ mod tests {
     #[tokio::test]
     async fn rejects_malformed_identifier() {
         let registry = Registry::new();
-        let args = Args {
-            command: Commands::Detail {
-                ident: "not-a-valid-id".to_string(),
-            },
+        let command = Commands::Detail {
+            ident: "not-a-valid-id".to_string(),
         };
 
         assert_eq!(
-            run(args, &registry).await,
+            run(command, &registry).await,
             Err("invalid identifier".to_string())
         );
     }
@@ -129,15 +138,13 @@ mod tests {
     #[tokio::test]
     async fn rejects_episode_number_zero() {
         let registry = Registry::new();
-        let args = Args {
-            command: Commands::Watch {
-                ident: "<GLP-1:some-anime#1>".to_string(),
-                ep: 0,
-            },
+        let command = Commands::Watch {
+            ident: "<GLP-1:some-anime#1>".to_string(),
+            ep: 0,
         };
 
         assert_eq!(
-            run(args, &registry).await,
+            run(command, &registry).await,
             Err("episode number must be 1 or greater".to_string())
         );
     }
