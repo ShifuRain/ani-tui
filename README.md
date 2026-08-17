@@ -3,9 +3,17 @@
 [![CI](https://github.com/ShifuRain/ani-tui/actions/workflows/ci.yml/badge.svg)](https://github.com/ShifuRain/ani-tui/actions/workflows/ci.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
 
-AniTUI is a CLI (and, eventually, a TUI) app for searching and watching anime in [mpv](https://mpv.io/). It's a Rust rewrite of [Pystardust's ani-cli](https://github.com/pystardust/ani-cli) — thanks to that project for decoding the goload.pro/GoGoPlay link protocol this app relies on.
+AniTUI is an interactive terminal app (with a scriptable CLI mode too) for searching and
+watching anime in [mpv](https://mpv.io/). Its request chain for anidb.app is modeled on
+[Pystardust's ani-cli](https://github.com/pystardust/ani-cli) — thanks to that project for
+figuring it out.
 
-> **Note:** `goload.pro`, the only data source this app currently supports, is a parked/for-sale domain as of 2026 and no longer serves anime. `search`, `detail`, `ep-count`, and `watch` will not return results until the app is pointed at a working source (tracked as follow-up work). The rest of the codebase — dependencies, scraping logic, error handling — has been modernized and is otherwise in working order.
+> **Note:** the only data source currently registered, anidb.app, sits behind a Cloudflare
+> managed challenge that this app's plain HTTP client can't pass — reliably getting through
+> would need browser-fingerprint-spoofing tooling (like curl-impersonate), which this project
+> isn't building. So `search`/`detail`/`ep-count`/`watch` won't return real results right now.
+> The app itself is otherwise in working order; it's just waiting on a source that's actually
+> reachable (tracked as follow-up work).
 
 ## Requirements
 
@@ -23,7 +31,24 @@ $ cargo install --path .
 
 ## Usage
 
-AniTUI identifies anime with an ID in the format `<source:id>`. To use commands like `watch` or `ep-count` you first need an ID from `search`.
+Run `ani-tui` with no arguments for the interactive TUI: type a search, arrow through
+results, drill into an episode list, hit enter to play. `mpv` launches in the background, so
+the TUI stays interactive right away instead of freezing until it closes.
+
+| Key | Action |
+| --- | --- |
+| type | edit the search box |
+| `enter` | search / select the highlighted item |
+| `up`/`down`, `j`/`k` | navigate |
+| `down`/`tab` | move focus from the search box into results |
+| `/` | back to the search box |
+| `esc`/`backspace` | back a screen |
+| `q` | quit (while not typing) |
+| `ctrl+c` | quit, from anywhere |
+
+For scripting, the same functionality is available as non-interactive subcommands. AniTUI
+identifies anime with an ID in the format `<source:id>`; `watch`/`ep-count`/`detail` need one
+from `search` first:
 
 ```console
 $ ani-tui search "keywords"
@@ -36,7 +61,8 @@ $ ani-tui detail "<ID>"
 $ ani-tui ep-count "<ID>"
 ```
 
-`detail` prints the most info about an anime: description, ID, episode count, and title. `ep-count` just prints the title and episode count.
+`detail` prints the most info about an anime: description, ID, episode count, and title.
+`ep-count` just prints the title and episode count.
 
 ```console
 $ ani-tui watch "<ID>" 1

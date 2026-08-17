@@ -1,7 +1,7 @@
 use crate::anime_repo::{
     AnimeRepository, AnimeRepositoryError, Detail, Episode, GlobalId, Result, SearchResult,
 };
-use crate::websites::{anidb_app::AnidbApp, gogoplay::Gogoplay};
+use crate::websites::anidb_app::AnidbApp;
 use futures::future::join_all;
 
 /// Holds every registered [`AnimeRepository`] and routes requests to the right one by
@@ -15,7 +15,7 @@ impl Registry {
     /// Builds a registry with every source this build supports.
     pub fn new() -> Self {
         Self {
-            sources: vec![Box::new(Gogoplay::new()), Box::new(AnidbApp::new())],
+            sources: vec![Box::new(AnidbApp::new())],
         }
     }
 
@@ -82,7 +82,7 @@ mod tests {
     #[test]
     fn finds_registered_source_by_prefix() {
         let registry = Registry::new();
-        assert!(registry.find("GLP-1").is_some());
+        assert!(registry.find("ADB-1").is_some());
         assert!(registry.find("no-such-source").is_none());
     }
 

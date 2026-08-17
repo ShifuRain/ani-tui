@@ -19,8 +19,6 @@ pub mod registry;
 pub mod websites {
     /// <https://anidb.app> API
     pub mod anidb_app;
-    /// <https://goload.pro> API
-    pub mod gogoplay;
 }
 
 #[macro_use(async_trait)]
