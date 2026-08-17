@@ -1,4 +1,4 @@
-use ani_tui::{anime_repo::AnimeRepository, cli_args::*, websites::gogoplay::*};
+use ani_tui::{anime_repo::GlobalId, cli_args::*, registry::Registry};
 
 use clap::Parser;
 use std::process::{Command, ExitCode, Stdio};
@@ -6,9 +6,9 @@ use std::process::{Command, ExitCode, Stdio};
 #[tokio::main]
 async fn main() -> ExitCode {
     let args = Args::parse();
-    let repo = Gogoplay::new();
+    let registry = Registry::new();
 
-    if let Err(message) = run(args, &repo).await {
+    if let Err(message) = run(args, &registry).await {
         eprintln!("Error: {message}");
         return ExitCode::FAILURE;
     }
@@ -16,81 +16,77 @@ async fn main() -> ExitCode {
 }
 
 /// Runs the requested subcommand, returning a user-facing error message on failure.
-async fn run(args: Args, repo: &Gogoplay) -> Result<(), String> {
+async fn run(args: Args, registry: &Registry) -> Result<(), String> {
     match args.command {
         Commands::Search { title } => {
-            let results = repo
-                .search(&title)
-                .await
-                .ok_or("could not search: the site may be down or unreachable")?;
+            let mut any_results = false;
 
-            for result in results {
-                println!(
-                    r#"
- • {title}
+            for (prefix, results) in registry.search(&title).await {
+                match results {
+                    Ok(results) => {
+                        for result in results {
+                            any_results = true;
+                            println!(
+                                r#"
+ • {title} [{prefix}]
    {ident}"#,
-                    ident = result.link.as_repr(),
-                    title = result.title
-                );
+                                ident = result.id.as_repr(),
+                                title = result.title,
+                            );
+                        }
+                    }
+                    Err(_) => eprintln!("Warning: source {prefix} could not be searched"),
+                }
+            }
+
+            if !any_results {
+                println!("No results found.");
             }
         }
         Commands::EpCount { ident } => {
-            let id = Identifier::from_repr(&ident).ok_or("invalid identifier")?;
-            let title = repo
-                .detail(EpisodeLink {
-                    link: id.clone(),
-                    title: String::new(),
-                })
-                .await
-                .map_err(|_| "could not fetch anime details")?
-                .anime_title;
-            let ep_count = repo
-                .list_eps(id)
-                .await
-                .map_err(|_| "could not fetch episode list")?
-                .len();
-
-            println!(r#""{title}" has {ep_count} episodes."#);
-        }
-        Commands::Detail { ident } => {
-            let id = Identifier::from_repr(&ident).ok_or("invalid identifier")?;
-            let detail = repo
-                .detail(EpisodeLink {
-                    link: id.clone(),
-                    title: String::new(),
-                })
+            let id = GlobalId::from_repr(&ident).ok_or("invalid identifier")?;
+            let detail = registry
+                .detail(&id)
                 .await
                 .map_err(|_| "could not fetch anime details")?;
-            let ep_count = repo
-                .list_eps(id)
+
+            println!(
+                r#""{title}" has {ep_count} episodes."#,
+                title = detail.title,
+                ep_count = detail.episode_count
+            );
+        }
+        Commands::Detail { ident } => {
+            let id = GlobalId::from_repr(&ident).ok_or("invalid identifier")?;
+            let detail = registry
+                .detail(&id)
                 .await
-                .map_err(|_| "could not fetch episode list")?
-                .len();
+                .map_err(|_| "could not fetch anime details")?;
 
             println!(
                 r#"{title}
 {eps} episodes, {ident}
 
 {description}"#,
-                title = detail.anime_title,
-                eps = ep_count,
+                title = detail.title,
+                eps = detail.episode_count,
                 description = detail.description
             );
         }
         Commands::Watch { ident, ep } => {
-            let id = Identifier::from_repr(&ident).ok_or("invalid identifier")?;
-            let episodes = repo
-                .list_eps(id)
+            let id = GlobalId::from_repr(&ident).ok_or("invalid identifier")?;
+            let ep_index = ep
+                .checked_sub(1)
+                .ok_or("episode number must be 1 or greater")?;
+            let episodes = registry
+                .list_eps(&id)
                 .await
                 .map_err(|_| "could not fetch episode list")?;
             let episode = episodes
-                .get(
-                    ep.checked_sub(1)
-                        .ok_or("episode number must be 1 or greater")?,
-                )
+                .get(ep_index)
                 .ok_or("episode number out of range")?;
-            let link = repo
-                .watch_link(episode.clone())
+            let link = registry
+                .watch_link(&episode.id)
                 .await
                 .map_err(|_| "could not resolve a watch link")?;
 
@@ -107,4 +103,42 @@ async fn run(args: Args, repo: &Gogoplay) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// These all fail validation before `run` ever touches the registry, so they're fast and
+    /// deterministic even without network access.
+    #[tokio::test]
+    async fn rejects_malformed_identifier() {
+        let registry = Registry::new();
+        let args = Args {
+            command: Commands::Detail {
+                ident: "not-a-valid-id".to_string(),
+            },
+        };
+
+        assert_eq!(
+            run(args, &registry).await,
+            Err("invalid identifier".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_episode_number_zero() {
+        let registry = Registry::new();
+        let args = Args {
+            command: Commands::Watch {
+                ident: "<GLP-1:some-anime#1>".to_string(),
+                ep: 0,
+            },
+        };
+
+        assert_eq!(
+            run(args, &registry).await,
+            Err("episode number must be 1 or greater".to_string())
+        );
+    }
 }
