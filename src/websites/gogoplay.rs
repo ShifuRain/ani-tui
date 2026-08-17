@@ -48,33 +48,59 @@ impl Default for Gogoplay {
 
 #[async_trait]
 impl AnimeRepository for Gogoplay {
-    type SearchResult = SearchPage;
-    type Identifier = Identifier;
-    type Episode = EpisodeLink;
-    type Link = String;
-    type Detail = Detail;
+    fn prefix(&self) -> &'static str {
+        REPR_PREFIX
+    }
 
-    async fn search(&self, query: &str) -> anime_repo::Result<Self::SearchResult> {
-        self.search(query)
+    async fn search(&self, query: &str) -> anime_repo::Result<Vec<anime_repo::SearchResult>> {
+        let results = self
+            .search(query)
             .await
-            .ok_or(AnimeRepositoryError::DatasourceError)
+            .ok_or(AnimeRepositoryError::DatasourceError)?;
+
+        Ok(results
+            .into_iter()
+            .map(|ep| anime_repo::SearchResult {
+                title: ep.title,
+                id: anime_repo::GlobalId {
+                    prefix: REPR_PREFIX.to_string(),
+                    raw: ep.link.as_raw(),
+                },
+            })
+            .collect())
     }
 
-    async fn list_eps(&self, url: Self::Identifier) -> anime_repo::Result<Vec<Self::Episode>> {
-        Ok(self.episode_page(url).await?.ep_list)
+    async fn list_eps(&self, raw_id: &str) -> anime_repo::Result<Vec<anime_repo::Episode>> {
+        let id = Identifier::from_raw(raw_id).ok_or(AnimeRepositoryError::Unsupported)?;
+        let eps = self.episode_page(id).await?.ep_list;
+
+        Ok(eps
+            .into_iter()
+            .map(|ep| anime_repo::Episode {
+                title: ep.title,
+                id: anime_repo::GlobalId {
+                    prefix: REPR_PREFIX.to_string(),
+                    raw: ep.link.as_raw(),
+                },
+            })
+            .collect())
     }
 
-    async fn detail(&self, ep: Self::Episode) -> anime_repo::Result<Self::Detail> {
-        let content = self.episode_page(ep.link).await?;
-        Ok(Detail {
-            anime_title: content.anime_title,
-            description: content.description,
+    async fn detail(&self, raw_id: &str) -> anime_repo::Result<anime_repo::Detail> {
+        let id = Identifier::from_raw(raw_id).ok_or(AnimeRepositoryError::Unsupported)?;
+        let page = self.episode_page(id).await?;
+
+        Ok(anime_repo::Detail {
+            title: page.anime_title,
+            description: page.description,
+            episode_count: page.ep_list.len(),
         })
     }
 
-    /// Returns a link to the iframe
-    async fn watch_link(&self, ep: Self::Episode) -> anime_repo::Result<Self::Link> {
-        let iframe_link = self.episode_page(ep.link).await?.iframe;
+    /// Resolves a direct video link by decrypting goload.pro's iframe payload.
+    async fn watch_link(&self, raw_id: &str) -> anime_repo::Result<String> {
+        let id = Identifier::from_raw(raw_id).ok_or(AnimeRepositoryError::Unsupported)?;
+        let iframe_link = self.episode_page(id).await?.iframe;
         let iframe = self.iframe_page(&iframe_link).await?;
 
         let token = String::from_utf8(
@@ -99,6 +125,8 @@ impl AnimeRepository for Gogoplay {
             .header("X-Requested-With", "XMLHttpRequest")
             .send()
             .await
+            .map_err(|_| ConnectionError)?
+            .error_for_status()
             .map_err(|_| ConnectionError)?
             .text()
             .await
@@ -173,6 +201,8 @@ impl Gogoplay {
             .send()
             .await
             .ok()?
+            .error_for_status()
+            .ok()?
             .text()
             .await
             .ok()?;
@@ -187,6 +217,8 @@ impl Gogoplay {
             .get(url.as_link())
             .send()
             .await
+            .or(Err(ConnectionError))?
+            .error_for_status()
             .or(Err(ConnectionError))?
             .text()
             .await
@@ -206,6 +238,8 @@ impl Gogoplay {
             .get(link)
             .send()
             .await
+            .or(Err(QueryError::ConnectionError))?
+            .error_for_status()
             .or(Err(QueryError::ConnectionError))?
             .text()
             .await
@@ -373,14 +407,13 @@ impl Identifier {
         })
     }
 
-    /// Takes a user friendly identifier and returns a parsed object
-    pub fn from_repr(url: &str) -> Option<Self> {
-        let cap = Regex::new(&format!(r"^<{}:(?P<id>.*?)#(?P<ep>.*?)>$", REPR_PREFIX))
-            .unwrap()
-            .captures(url)?;
+    /// Parses this source's raw ID format (`id#ep`) — the `raw` part of a
+    /// [`crate::anime_repo::GlobalId`] this source produced.
+    pub fn from_raw(raw: &str) -> Option<Self> {
+        let (id, ep) = raw.split_once('#')?;
         Some(Self {
-            id: cap.name("id")?.as_str().to_string(),
-            ep: cap.name("ep")?.as_str().parse().ok()?,
+            id: id.to_string(),
+            ep: ep.parse().ok()?,
         })
     }
 
@@ -394,14 +427,10 @@ impl Identifier {
         )
     }
 
-    /// Makes a new user friendly formatted identifier from self
-    pub fn as_repr(&self) -> String {
-        format!(
-            "<{prefix}:{id}#{ep}>",
-            prefix = REPR_PREFIX,
-            id = self.id,
-            ep = self.ep
-        )
+    /// Formats as this source's raw ID format (`id#ep`) — the `raw` part of a
+    /// [`crate::anime_repo::GlobalId`].
+    pub fn as_raw(&self) -> String {
+        format!("{id}#{ep}", id = self.id, ep = self.ep)
     }
 }
 
@@ -496,17 +525,43 @@ mod tests {
     }
 
     #[test]
-    fn identifier_repr_round_trip() {
-        let ident = Identifier::from_repr("<GLP-1:some-anime#1>").expect("valid repr should parse");
+    fn identifier_raw_round_trip() {
+        let ident = Identifier::from_raw("some-anime#1").expect("valid raw id should parse");
         assert_eq!(ident.id, "some-anime");
         assert_eq!(ident.ep, 1);
-        assert_eq!(ident.as_repr(), "<GLP-1:some-anime#1>");
+        assert_eq!(ident.as_raw(), "some-anime#1");
+    }
+
+    #[tokio::test]
+    async fn adapter_reports_its_prefix() {
+        assert_eq!(Gogoplay::new().prefix(), REPR_PREFIX);
+    }
+
+    #[tokio::test]
+    async fn adapter_rejects_malformed_raw_id_without_a_network_call() {
+        // These all fail to parse as `id#ep` before any request is made, so this test is fast
+        // and deterministic even without network access.
+        let gogoplay = Gogoplay::new();
+
+        assert!(matches!(
+            gogoplay.list_eps("no-hash-here").await,
+            Err(AnimeRepositoryError::Unsupported)
+        ));
+        assert!(matches!(
+            gogoplay.detail("no-hash-here").await,
+            Err(AnimeRepositoryError::Unsupported)
+        ));
+        assert!(matches!(
+            gogoplay.watch_link("no-hash-here").await,
+            Err(AnimeRepositoryError::Unsupported)
+        ));
     }
 
     #[test]
     fn identifier_rejects_garbage() {
         assert!(Identifier::from_link("https://example.com/nope").is_none());
-        assert!(Identifier::from_repr("not-a-valid-repr").is_none());
+        assert!(Identifier::from_raw("no-hash-here").is_none());
+        assert!(Identifier::from_raw("some-anime#not-a-number").is_none());
     }
 
     #[test]
