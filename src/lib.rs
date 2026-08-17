@@ -23,14 +23,3 @@ extern crate async_trait;
 
 #[macro_use(Subcommand)]
 extern crate clap;
-
-#[macro_use(with)]
-extern crate with_macro;
-
-#[cfg(test)]
-#[macro_use(automock, mock)]
-extern crate mockall;
-
-#[cfg(test)]
-#[macro_use(double)]
-extern crate mockall_double;
