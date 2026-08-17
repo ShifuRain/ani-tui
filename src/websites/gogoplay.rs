@@ -1,10 +1,7 @@
-use std::{
-    io::Write,
-    process::{Command, Stdio},
-    thread::spawn,
-};
-
 use crate::anime_repo::{self, AnimeRepository, AnimeRepositoryError};
+use aes::Aes256;
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+use cbc::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 use easy_scraper::Pattern;
 use regex::{escape, Regex};
 use reqwest::{
@@ -15,22 +12,37 @@ use reqwest::{
 use QueryError::{ConnectionError, InvalidLink, ParsingError};
 
 /// A link to the website
-pub const BASE_URL: &'static str = "https://goload.pro";
+pub const BASE_URL: &str = "https://goload.pro";
 
 /// <https://goload.pro> API.
 pub struct Gogoplay {
+    /// HTTP client used for all requests to goload.pro
     web_client: Client,
 }
 
 impl Gogoplay {
     #[allow(missing_docs)]
     pub fn new() -> Self {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            USER_AGENT,
+            "Mozilla/5.0 (X11; Linux x86_64; rv:101.0) Gecko/20100101 Firefox/101.0"
+                .parse()
+                .expect("Could not set User Agent for web client"),
+        );
+
         Self {
-            web_client: Client::builder().default_headers(with!{
-                mut HeaderMap::new() =>
-                    .insert(USER_AGENT, "Mozilla/5.0 (X11; Linux x86_64; rv:101.0) Gecko/20100101 Firefox/101.0".parse().expect("Could not set User Agent for web client"))
-            }).build().expect("Could not build a web client"),
+            web_client: Client::builder()
+                .default_headers(headers)
+                .build()
+                .expect("Could not build a web client"),
         }
+    }
+}
+
+impl Default for Gogoplay {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -65,61 +77,24 @@ impl AnimeRepository for Gogoplay {
         let iframe_link = self.episode_page(ep.link).await?.iframe;
         let iframe = self.iframe_page(&iframe_link).await?;
 
-        enum Mode {
-            Enc,
-            Dec,
-        }
-
-        fn openssl(mode: Mode, data: Vec<u8>, key: &str, iv: &str) -> Option<Vec<u8>> {
-            let mut openssl = Command::new("openssl")
-                .args(&[
-                    "enc",
-                    match mode {
-                        Mode::Enc => "-e",
-                        Mode::Dec => "-d",
-                    },
-                    "-aes256",
-                    "-K",
-                    key,
-                    "-iv",
-                    iv,
-                ])
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                //.stderr(Stdio::piped())
-                .spawn()
-                .ok()?;
-            let mut stdin = openssl.stdin.take()?;
-            let writer = spawn(move || {
-                stdin.write_all(&data).unwrap();
-            });
-            let result = openssl.wait_with_output().ok()?.stdout;
-            writer.join().ok()?;
-            Some(result)
-        }
-
         let token = String::from_utf8(
-            openssl(Mode::Dec, iframe.token, &iframe.secret_key, &iframe.iv).ok_or(ParsingError)?,
+            aes256_cbc_decrypt(&iframe.token, &iframe.secret_key, &iframe.iv)
+                .ok_or(ParsingError)?,
         )
         .map_err(|_| ParsingError)?;
 
-        let ajax_id = base64::encode(
-            openssl(
-                Mode::Enc,
-                iframe.id.as_bytes().to_vec(),
-                &iframe.secret_key,
-                &iframe.iv,
-            )
-            .ok_or(ParsingError)?,
+        let ajax_id = STANDARD.encode(
+            aes256_cbc_encrypt(iframe.id.as_bytes(), &iframe.secret_key, &iframe.iv)
+                .ok_or(ParsingError)?,
         );
 
         let json = self
             .web_client
-            .get(&format!(
+            .get(format!(
                 "https://goload.pro/encrypt-ajax.php?id={ajax_id}&alias={id}&{token}",
                 ajax_id = ajax_id,
                 id = iframe.id,
-                token = &token.split_at(token.find("token").ok_or(ParsingError)?).1,
+                token = token.split_at(token.find("token").ok_or(ParsingError)?).1,
             ))
             .header("X-Requested-With", "XMLHttpRequest")
             .send()
@@ -130,19 +105,20 @@ impl AnimeRepository for Gogoplay {
             .map_err(|_| ConnectionError)?;
 
         let regex = regex::Regex::new(r#""data":"(.*?)""#).unwrap();
-        let enc_link = base64::decode(
-            regex
-                .captures(&json)
-                .ok_or(ParsingError)?
-                .get(1)
-                .ok_or(ParsingError)?
-                .as_str()
-                .replace(r"\", ""),
-        )
-        .map_err(|_| ParsingError)?;
+        let enc_link = STANDARD
+            .decode(
+                regex
+                    .captures(&json)
+                    .ok_or(ParsingError)?
+                    .get(1)
+                    .ok_or(ParsingError)?
+                    .as_str()
+                    .replace('\\', ""),
+            )
+            .map_err(|_| ParsingError)?;
 
         let json = String::from_utf8(
-            openssl(Mode::Dec, enc_link, &iframe.second_key, &iframe.iv).ok_or(ParsingError)?,
+            aes256_cbc_decrypt(&enc_link, &iframe.second_key, &iframe.iv).ok_or(ParsingError)?,
         )
         .map_err(|_| ParsingError)?;
 
@@ -153,10 +129,34 @@ impl AnimeRepository for Gogoplay {
             .get(1)
             .ok_or(ParsingError)?
             .as_str()
-            .replace(r"\", "");
+            .replace('\\', "");
 
         Ok(link)
     }
+}
+
+/// AES-256-CBC decryptor, equivalent to `openssl enc -d -aes256`
+type Aes256CbcDec = cbc::Decryptor<Aes256>;
+/// AES-256-CBC encryptor, equivalent to `openssl enc -aes256`
+type Aes256CbcEnc = cbc::Encryptor<Aes256>;
+
+/// Decrypts `data` with AES-256 in CBC mode, PKCS7 padded. Mirrors `openssl enc -d -aes256 -K
+/// key -iv iv`, but operating on raw key/iv bytes instead of a hex-encoded CLI argument.
+fn aes256_cbc_decrypt(data: &[u8], key: &[u8], iv: &[u8]) -> Option<Vec<u8>> {
+    Aes256CbcDec::new_from_slices(key, iv)
+        .ok()?
+        .decrypt_padded_vec_mut::<Pkcs7>(data)
+        .ok()
+}
+
+/// Encrypts `data` with AES-256 in CBC mode, PKCS7 padded. Mirrors `openssl enc -aes256 -K key
+/// -iv iv`, but operating on raw key/iv bytes instead of a hex-encoded CLI argument.
+fn aes256_cbc_encrypt(data: &[u8], key: &[u8], iv: &[u8]) -> Option<Vec<u8>> {
+    Some(
+        Aes256CbcEnc::new_from_slices(key, iv)
+            .ok()?
+            .encrypt_padded_vec_mut::<Pkcs7>(data),
+    )
 }
 
 impl Gogoplay {
@@ -177,35 +177,7 @@ impl Gogoplay {
             .await
             .ok()?;
 
-        let pattern = Pattern::new(
-            r#"
-<div class="video_player followed default">
-    <ul class="listing items">
-        <li class="video-block ">
-            <a href="{{link}}">
-                <div class="name">
-                  {{title}}
-                </div>
-            </a>
-        </li>
-    </ul>
-</div>"#,
-        )
-        .unwrap();
-
-        Some({
-            let mut eps = Vec::new();
-            for ep in pattern.matches(&html) {
-                eps.push(EpisodeLink {
-                    title: ep.get("title").unwrap().to_string(),
-                    link: Identifier::from_link(&with! {
-                        mut BASE_URL.to_string() =>
-                            .push_str(ep.get("link").unwrap())
-                    })?,
-                })
-            }
-            eps
-        })
+        parse_search_page(&html)
     }
 
     /// Get all the relevant info on a page
@@ -220,76 +192,7 @@ impl Gogoplay {
             .await
             .or(Err(ConnectionError))?;
 
-        let info_pattern = Pattern::new(
-            r#"
-<div class="video-info">
-  <div class="video-info-left">
-    <h1>{{ep_title}}</h1>
-    ...
-    <div class="video-details">
-      <span class="date">{{anime_title}}</span>
-      <div class="post-entry">
-        <div class="content-more-js" id="rmjs-1">{{description}}</div>
-      </div>
-    </div>
-  </div>
-</div>"#,
-        )
-        .unwrap();
-
-        let episode_pattern = Pattern::new(
-            r#"
-<div class="video-info">
-  <div class="video-info-left">
-    <ul class="listing items lists">
-      <li class="video-block ">
-        <a href="{{ep_link}}">
-          <div class="name">
-            {{ep_title}}
-          </div>
-        </a>
-      </li>
-    </ul>
-  </div>
-</div>"#,
-        )
-        .unwrap();
-
-        let iframe_pattern = Pattern::new(r#"<iframe src="{{link}}" allowfullscreen="true" frameborder="0" marginwidth="0" marginheight="0" scrolling="no" />"#).unwrap();
-
-        let m = info_pattern.matches(&html);
-        let info = m.get(0).ok_or(ParsingError)?;
-        let episodes = episode_pattern.matches(&html);
-
-        Ok(EpisodePage {
-            link: url,
-            ep_title: info["ep_title"].to_string(),
-            anime_title: info["anime_title"].to_string(),
-            description: info["description"].to_string(),
-            ep_list: {
-                let mut eps = Vec::new();
-                for ep in episodes {
-                    eps.push(EpisodeLink {
-                        title: ep["ep_title"].to_string(),
-                        link: Identifier::from_link(&with! {
-                            mut BASE_URL.to_string() =>
-                                .push_str(&ep["ep_link"])
-                        })
-                        .ok_or(InvalidLink)?,
-                    })
-                }
-                eps
-            },
-            iframe: with! {
-                mut String::from("https:") =>
-                    .push_str(
-                        &iframe_pattern
-                            .matches(&html)
-                            .get(0)
-                            .ok_or(InvalidLink)
-                            ?["link"])
-            },
-        })
+        parse_episode_page(&html, url)
     }
 
     /// Returns content on player iframe page
@@ -308,7 +211,113 @@ impl Gogoplay {
             .await
             .or(Err(QueryError::ConnectionError))?;
 
-        let pattern = Pattern::new(r#"
+        parse_iframe_page(&html)
+    }
+}
+
+/// Parses a search-results page's HTML into a list of results. Split out from
+/// [`Gogoplay::search`] so the scraping logic can be tested against a fixture HTML file
+/// without a network round-trip.
+fn parse_search_page(html: &str) -> Option<SearchPage> {
+    let pattern = Pattern::new(
+        r#"
+<div class="video_player followed default">
+    <ul class="listing items">
+        <li class="video-block ">
+            <a href="{{link}}">
+                <div class="name">
+                  {{title}}
+                </div>
+            </a>
+        </li>
+    </ul>
+</div>"#,
+    )
+    .unwrap();
+
+    let mut eps = Vec::new();
+    for ep in pattern.matches(html) {
+        eps.push(EpisodeLink {
+            title: ep.get("title").unwrap().to_string(),
+            link: Identifier::from_link(&format!("{BASE_URL}{}", ep.get("link").unwrap()))?,
+        })
+    }
+    Some(eps)
+}
+
+/// Parses an anime/episode page's HTML into its structured content. Split out from
+/// [`Gogoplay::episode_page`] so the scraping logic can be tested against a fixture HTML file
+/// without a network round-trip.
+fn parse_episode_page(html: &str, url: Identifier) -> Result<EpisodePage, QueryError> {
+    let info_pattern = Pattern::new(
+        r#"
+<div class="video-info">
+  <div class="video-info-left">
+    <h1>{{ep_title}}</h1>
+    ...
+    <div class="video-details">
+      <span class="date">{{anime_title}}</span>
+      <div class="post-entry">
+        <div class="content-more-js" id="rmjs-1">{{description}}</div>
+      </div>
+    </div>
+  </div>
+</div>"#,
+    )
+    .unwrap();
+
+    let episode_pattern = Pattern::new(
+        r#"
+<div class="video-info">
+  <div class="video-info-left">
+    <ul class="listing items lists">
+      <li class="video-block ">
+        <a href="{{ep_link}}">
+          <div class="name">
+            {{ep_title}}
+          </div>
+        </a>
+      </li>
+    </ul>
+  </div>
+</div>"#,
+    )
+    .unwrap();
+
+    let iframe_pattern = Pattern::new(r#"<iframe src="{{link}}" allowfullscreen="true" frameborder="0" marginwidth="0" marginheight="0" scrolling="no" />"#).unwrap();
+
+    let m = info_pattern.matches(html);
+    let info = m.first().ok_or(ParsingError)?;
+    let episodes = episode_pattern.matches(html);
+
+    Ok(EpisodePage {
+        link: url,
+        ep_title: info["ep_title"].to_string(),
+        anime_title: info["anime_title"].to_string(),
+        description: info["description"].to_string(),
+        ep_list: {
+            let mut eps = Vec::new();
+            for ep in episodes {
+                eps.push(EpisodeLink {
+                    title: ep["ep_title"].to_string(),
+                    link: Identifier::from_link(&format!("{BASE_URL}{}", ep["ep_link"]))
+                        .ok_or(InvalidLink)?,
+                })
+            }
+            eps
+        },
+        iframe: format!(
+            "https:{}",
+            iframe_pattern.matches(html).first().ok_or(InvalidLink)?["link"]
+        ),
+    })
+}
+
+/// Parses a player iframe page's HTML into its structured content. Split out from
+/// [`Gogoplay::iframe_page`] so the scraping logic can be tested against a fixture HTML file
+/// without a network round-trip.
+fn parse_iframe_page(html: &str) -> Result<IframePage, QueryError> {
+    let pattern = Pattern::new(r#"
 <head>
    <script type="text/javascript" src="https://goload.pro/js/crypto-js/crypto-js.js?v=9.988" data-name="episode" data-value="{{token}}"></script>
 </head>
@@ -322,20 +331,19 @@ impl Gogoplay {
 </body>
 "#).unwrap();
 
-        let matches = pattern.matches(&html);
-        let matches = matches.get(0).ok_or(QueryError::ParsingError)?;
+    let matches = pattern.matches(html);
+    let matches = matches.first().ok_or(QueryError::ParsingError)?;
 
-        let get =
-            |name: &str| -> Result<&str, QueryError> { Ok(matches.get(name).ok_or(ParsingError)?) };
+    let get =
+        |name: &str| -> Result<&str, QueryError> { Ok(matches.get(name).ok_or(ParsingError)?) };
 
-        Ok(IframePage {
-            token: base64::decode(get("token")?).map_err(|_| ParsingError)?,
-            secret_key: hex::encode(get("secret_key")?.as_bytes()),
-            second_key: hex::encode(get("second_key")?.as_bytes()),
-            iv: hex::encode(get("iv")?.as_bytes()),
-            id: get("id")?.to_string(),
-        })
-    }
+    Ok(IframePage {
+        token: STANDARD.decode(get("token")?).map_err(|_| ParsingError)?,
+        secret_key: get("secret_key")?.as_bytes().to_vec(),
+        second_key: get("second_key")?.as_bytes().to_vec(),
+        iv: get("iv")?.as_bytes().to_vec(),
+        id: get("id")?.to_string(),
+    })
 }
 
 /// An identifier for an episode
@@ -348,7 +356,7 @@ pub struct Identifier {
 }
 
 /// A source prefix in the string representation of Identifier
-pub const REPR_PREFIX: &'static str = "GLP-1";
+pub const REPR_PREFIX: &str = "GLP-1";
 
 impl Identifier {
     /// Takes a URL link `"https://goload.pro/..."` and returns a parsed object
@@ -461,12 +469,148 @@ impl From<QueryError> for AnimeRepositoryError {
 pub struct IframePage {
     /// Contains encrypted data used for fetching download URL
     pub token: Vec<u8>,
-    /// 1st encryption key
-    pub secret_key: String,
-    /// 2nd encryption key
-    pub second_key: String,
-    /// Encryption IV (initialization vector)
-    pub iv: String,
+    /// 1st encryption key, as raw bytes (not hex-encoded)
+    pub secret_key: Vec<u8>,
+    /// 2nd encryption key, as raw bytes (not hex-encoded)
+    pub second_key: Vec<u8>,
+    /// Encryption IV (initialization vector), as raw bytes (not hex-encoded)
+    pub iv: Vec<u8>,
     /// Anime ID
     pub id: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn identifier_link_round_trip() {
+        let ident = Identifier::from_link("https://goload.pro/videos/some-anime-episode-1")
+            .expect("valid link should parse");
+        assert_eq!(ident.id, "some-anime");
+        assert_eq!(ident.ep, 1);
+        assert_eq!(
+            ident.as_link(),
+            "https://goload.pro/videos/some-anime-episode-1"
+        );
+    }
+
+    #[test]
+    fn identifier_repr_round_trip() {
+        let ident = Identifier::from_repr("<GLP-1:some-anime#1>").expect("valid repr should parse");
+        assert_eq!(ident.id, "some-anime");
+        assert_eq!(ident.ep, 1);
+        assert_eq!(ident.as_repr(), "<GLP-1:some-anime#1>");
+    }
+
+    #[test]
+    fn identifier_rejects_garbage() {
+        assert!(Identifier::from_link("https://example.com/nope").is_none());
+        assert!(Identifier::from_repr("not-a-valid-repr").is_none());
+    }
+
+    #[test]
+    fn parses_search_page_fixture() {
+        let html = include_str!("../../tests/fixtures/search.html");
+        let results = parse_search_page(html).expect("fixture should parse");
+
+        assert!(!results.is_empty());
+        let first = &results[0];
+        assert_eq!(first.title.trim(), "Some Anime Episode 12");
+        assert_eq!(first.link.id, "some-anime");
+        assert_eq!(first.link.ep, 12);
+    }
+
+    #[test]
+    fn parses_episode_page_fixture() {
+        let html = include_str!("../../tests/fixtures/some-anime-episode-1.html");
+        let url = Identifier {
+            id: "some-ident".to_string(),
+            ep: 1,
+        };
+        let page = parse_episode_page(html, url).expect("fixture should parse");
+
+        assert_eq!(page.ep_title.trim(), "Episode title");
+        assert_eq!(page.anime_title.trim(), "Anime title");
+        assert!(page.description.contains("Multiline"));
+        assert!(page.iframe.starts_with("https://goload.pro/streaming.php"));
+        assert_eq!(page.ep_list.len(), 2);
+        assert_eq!(page.ep_list[0].link.id, "some-ident");
+        assert_eq!(page.ep_list[0].link.ep, 2);
+    }
+
+    #[test]
+    fn parses_iframe_page_fixture() {
+        let html = include_str!("../../tests/fixtures/iframe.html");
+        let page = parse_iframe_page(html).expect("fixture should parse");
+
+        assert_eq!(page.id, "MTUwMjU3");
+        assert!(!page.token.is_empty());
+        assert_eq!(page.secret_key, b"37911490979715163134003223491201");
+        assert_eq!(page.second_key, b"54674138327930866480207815084989");
+        assert_eq!(page.iv, b"3134003223491201");
+    }
+
+    #[test]
+    fn aes256_cbc_round_trips() {
+        let key = [0x11u8; 32];
+        let iv = [0x22u8; 16];
+        let plaintext = b"the quick brown fox jumps over the lazy dog";
+
+        let encrypted =
+            aes256_cbc_encrypt(plaintext, &key, &iv).expect("encryption should succeed");
+        let decrypted =
+            aes256_cbc_decrypt(&encrypted, &key, &iv).expect("decryption should succeed");
+        assert_eq!(decrypted, plaintext);
+        assert_eq!(encrypted.len(), 48); // 44 bytes of plaintext padded to a multiple of the 16 byte block size
+    }
+
+    #[test]
+    fn aes256_cbc_matches_openssl_cli_output() {
+        // Cross-checks this port against the system `openssl` binary (the tool this code used
+        // to shell out to), so we know the native rewrite is byte-for-byte equivalent. Skips
+        // if `openssl` isn't installed rather than failing an environment that lacks it.
+        use std::process::{Command, Stdio};
+
+        let Ok(version_check) = Command::new("openssl").arg("version").output() else {
+            eprintln!("openssl CLI not found, skipping cross-check");
+            return;
+        };
+        if !version_check.status.success() {
+            eprintln!("openssl CLI not usable, skipping cross-check");
+            return;
+        }
+
+        let key_hex = hex::encode([0x11u8; 32]);
+        let iv_hex = hex::encode([0x22u8; 16]);
+        let plaintext = b"the quick brown fox jumps over the lazy dog";
+
+        let mut child = Command::new("openssl")
+            .args(["enc", "-e", "-aes256", "-K", &key_hex, "-iv", &iv_hex])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn openssl");
+        {
+            use std::io::Write;
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(plaintext)
+                .expect("failed to write to openssl stdin");
+        }
+        let openssl_output = child
+            .wait_with_output()
+            .expect("failed to read openssl output")
+            .stdout;
+
+        let our_output = aes256_cbc_encrypt(plaintext, &[0x11u8; 32], &[0x22u8; 16])
+            .expect("encryption should succeed");
+
+        assert_eq!(
+            our_output, openssl_output,
+            "native AES-256-CBC output must match openssl CLI output"
+        );
+    }
 }
