@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use ani_tui::registry::Registry;
 use crossterm::{
-    event::{Event, EventStream},
+    event::{DisableMouseCapture, EnableMouseCapture, Event, EventStream},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -28,14 +28,14 @@ pub async fn run(
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
     let result = run_app(&mut terminal, registry, &theme, &mut watch_history).await;
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
     terminal.show_cursor()?;
 
     result
@@ -47,7 +47,7 @@ fn install_panic_hook() {
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
         let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen);
+        let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
         original_hook(panic_info);
     }));
 }
@@ -63,13 +63,16 @@ async fn run_app(
     let (tx, mut rx) = mpsc::unbounded_channel::<AppEvent>();
     let mut events = EventStream::new();
 
-    terminal.draw(|frame| ui::draw(frame, &app, theme))?;
+    let mut list_area = None;
+    terminal.draw(|frame| list_area = Some(ui::draw(frame, &app, theme)))?;
+    app.list_area = list_area;
 
     loop {
         tokio::select! {
             maybe_event = events.next() => {
                 match maybe_event {
                     Some(Ok(Event::Key(key))) => app.on_key(key),
+                    Some(Ok(Event::Mouse(mouse))) => app.on_mouse(mouse),
                     Some(Ok(_)) => {}
                     Some(Err(_)) => {}
                     None => app.should_quit = true,
@@ -88,7 +91,9 @@ async fn run_app(
             break;
         }
 
-        terminal.draw(|frame| ui::draw(frame, &app, theme))?;
+        let mut list_area = None;
+        terminal.draw(|frame| list_area = Some(ui::draw(frame, &app, theme)))?;
+        app.list_area = list_area;
     }
 
     Ok(())

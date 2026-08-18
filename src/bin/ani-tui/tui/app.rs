@@ -1,6 +1,52 @@
 use ani_tui::anime_repo::{self, Detail, Episode, GlobalId, SearchResult, WatchLink};
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use std::collections::HashSet;
+
+/// Rendered position of the currently visible scrollable list, used for mouse hit-testing.
+/// Deliberately a plain rectangle rather than `ratatui::layout::Rect` — `App` stays free of
+/// rendering-crate types so [`App::on_key`]/[`App::on_mouse`] stay pure and unit-testable, the
+/// same reasoning already applied to keeping side effects out of `App` entirely.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ListArea {
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+}
+
+impl ListArea {
+    fn contains_row(self, row: u16) -> bool {
+        row >= self.y && row < self.y + self.height
+    }
+
+    /// The scrollbar's column, matching `ScrollbarOrientation::VerticalRight` in `ui.rs`: the
+    /// rightmost column of the same area the list itself is rendered into.
+    fn scrollbar_column(self) -> u16 {
+        self.x + self.width.saturating_sub(1)
+    }
+
+    /// Maps a mouse row within this area to a proportional index into a list of `len` items.
+    fn index_for_row(self, row: u16, len: usize) -> usize {
+        if len == 0 {
+            return 0;
+        }
+        let relative = row.saturating_sub(self.y) as f64;
+        let height = self.height.max(1) as f64;
+        let index = (relative / height * len as f64) as usize;
+        index.min(len - 1)
+    }
+}
+
+/// Clamps `current + delta` into `0..len`, saturating at either end. `len == 0` always yields
+/// `0`.
+fn clamp_index(current: usize, delta: i32, len: usize) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    (current as i32 + delta).clamp(0, len as i32 - 1) as usize
+}
 
 /// A parsed jump-to-episode target: either a plain episode number, or a season+episode pair
 /// for sources whose numbering restarts every season (see [`parse_jump_target`]).
@@ -67,6 +113,14 @@ pub struct App {
     pub anime_languages: Vec<String>,
     pub episodes: Vec<Episode>,
     pub episodes_selected: usize,
+    /// Screen position of the currently visible list (results or episodes, whichever the
+    /// active screen shows), refreshed on every frame draw. Used to hit-test mouse clicks/drags
+    /// against the scrollbar. `None` before the first frame is drawn.
+    pub list_area: Option<ListArea>,
+    /// Whether the user is currently dragging the scrollbar (mouse button held after a
+    /// [`MouseEventKind::Down`] that landed on it), so subsequent `Drag` events keep scrolling
+    /// even if the cursor strays off the scrollbar's exact column.
+    pub dragging_scrollbar: bool,
     /// Watched episode ids ([`GlobalId::as_repr`] strings), hydrated once at startup from
     /// persisted watch history and kept in sync with it via [`Self::pending_watch_history`].
     pub watched: HashSet<String>,
@@ -100,6 +154,8 @@ impl App {
             anime_languages: Vec::new(),
             episodes: Vec::new(),
             episodes_selected: 0,
+            list_area: None,
+            dragging_scrollbar: false,
             watched: HashSet::new(),
             jump_input: None,
             status: None,
@@ -127,6 +183,69 @@ impl App {
         match self.screen {
             Screen::Search => self.on_key_search(key),
             Screen::Episodes => self.on_key_episodes(key),
+        }
+    }
+
+    /// Handles a mouse event: click-to-jump and drag-to-scroll on the currently visible list's
+    /// scrollbar. Ignored while [`Self::jump_input`] is active, same as other non-jump keys.
+    pub fn on_mouse(&mut self, event: MouseEvent) {
+        if self.jump_input.is_some() {
+            return;
+        }
+
+        match event.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(area) = self.list_area {
+                    if event.column == area.scrollbar_column() && area.contains_row(event.row) {
+                        self.dragging_scrollbar = true;
+                        self.set_selection_from_row(area, event.row);
+                    }
+                }
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if self.dragging_scrollbar {
+                    if let Some(area) = self.list_area {
+                        self.set_selection_from_row(area, event.row);
+                    }
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => self.dragging_scrollbar = false,
+            MouseEventKind::ScrollUp => self.nudge_current_selection(-3),
+            MouseEventKind::ScrollDown => self.nudge_current_selection(3),
+            _ => {}
+        }
+    }
+
+    /// Sets the current screen's selected index from a mouse row, proportional to `area`.
+    /// Clicking the results list's scrollbar also moves focus there, matching what `Down`/`Tab`
+    /// already do when the results list has entries.
+    fn set_selection_from_row(&mut self, area: ListArea, row: u16) {
+        match self.screen {
+            Screen::Search => {
+                if !self.results.is_empty() {
+                    self.focus = Focus::Results;
+                    self.results_selected = area.index_for_row(row, self.results.len());
+                }
+            }
+            Screen::Episodes => {
+                if !self.episodes.is_empty() {
+                    self.episodes_selected = area.index_for_row(row, self.episodes.len());
+                }
+            }
+        }
+    }
+
+    /// Moves the current screen's selection by `delta` (negative = up), clamped to bounds. Used
+    /// for mouse wheel scrolling.
+    fn nudge_current_selection(&mut self, delta: i32) {
+        match self.screen {
+            Screen::Search if self.focus == Focus::Results => {
+                self.results_selected = clamp_index(self.results_selected, delta, self.results.len());
+            }
+            Screen::Episodes => {
+                self.episodes_selected = clamp_index(self.episodes_selected, delta, self.episodes.len());
+            }
+            _ => {}
         }
     }
 
@@ -338,6 +457,10 @@ mod tests {
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
+        MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE }
     }
 
     fn sample_result(prefix: &str, raw: &str, title: &str) -> SearchResult {
@@ -617,6 +740,107 @@ mod tests {
 
         assert_eq!(app.episodes_selected, 0, "selection shouldn't move on a miss");
         assert_eq!(app.error, Some("No episode 9".to_string()));
+    }
+
+    fn episode_area() -> ListArea {
+        ListArea { x: 0, y: 0, width: 40, height: 10 }
+    }
+
+    #[test]
+    fn clicking_the_scrollbar_column_jumps_to_the_proportional_episode() {
+        let mut app = App::new();
+        app.screen = Screen::Episodes;
+        app.list_area = Some(episode_area());
+        for n in 1..=10 {
+            app.episodes.push(sample_episode("AWT-1", &format!("e{n}"), n));
+        }
+
+        // Row 5 of a 10-row area over 10 episodes -> index 5.
+        app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 39, 5));
+
+        assert!(app.dragging_scrollbar);
+        assert_eq!(app.episodes_selected, 5);
+    }
+
+    #[test]
+    fn clicking_off_the_scrollbar_column_does_nothing() {
+        let mut app = App::new();
+        app.screen = Screen::Episodes;
+        app.list_area = Some(episode_area());
+        app.episodes.push(sample_episode("AWT-1", "e1", 1));
+        app.episodes.push(sample_episode("AWT-1", "e2", 2));
+
+        app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 10, 5));
+
+        assert!(!app.dragging_scrollbar);
+        assert_eq!(app.episodes_selected, 0);
+    }
+
+    #[test]
+    fn dragging_after_a_scrollbar_click_keeps_scrolling_even_off_column() {
+        let mut app = App::new();
+        app.screen = Screen::Episodes;
+        app.list_area = Some(episode_area());
+        for n in 1..=10 {
+            app.episodes.push(sample_episode("AWT-1", &format!("e{n}"), n));
+        }
+
+        app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 39, 0));
+        assert_eq!(app.episodes_selected, 0);
+
+        // Cursor drifts off the scrollbar's exact column mid-drag; should still track.
+        app.on_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 20, 9));
+        assert_eq!(app.episodes_selected, 9);
+
+        app.on_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 20, 9));
+        assert!(!app.dragging_scrollbar);
+
+        // No longer dragging, so further moves at the same position don't do anything.
+        app.on_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 20, 0));
+        assert_eq!(app.episodes_selected, 9);
+    }
+
+    #[test]
+    fn mouse_wheel_nudges_the_selection() {
+        let mut app = App::new();
+        app.screen = Screen::Episodes;
+        for n in 1..=10 {
+            app.episodes.push(sample_episode("AWT-1", &format!("e{n}"), n));
+        }
+
+        app.on_mouse(mouse(MouseEventKind::ScrollDown, 0, 0));
+        assert_eq!(app.episodes_selected, 3);
+
+        app.on_mouse(mouse(MouseEventKind::ScrollUp, 0, 0));
+        assert_eq!(app.episodes_selected, 0);
+    }
+
+    #[test]
+    fn mouse_is_ignored_while_jump_input_is_active() {
+        let mut app = App::new();
+        app.screen = Screen::Episodes;
+        app.list_area = Some(episode_area());
+        app.episodes.push(sample_episode("AWT-1", "e1", 1));
+        app.episodes.push(sample_episode("AWT-1", "e2", 2));
+        app.jump_input = Some(String::new());
+
+        app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 39, 9));
+
+        assert_eq!(app.episodes_selected, 0);
+        assert_eq!(app.jump_input.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn clicking_the_results_scrollbar_moves_focus_there() {
+        let mut app = App::new();
+        app.list_area = Some(episode_area());
+        app.results.push(sample_result("ADB-1", "x#1", "A"));
+        app.results.push(sample_result("ADB-1", "x#2", "B"));
+
+        app.on_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 39, 9));
+
+        assert_eq!(app.focus, Focus::Results);
+        assert_eq!(app.results_selected, 1);
     }
 
     #[test]

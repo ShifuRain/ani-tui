@@ -9,14 +9,22 @@ use ratatui::{
     Frame,
 };
 
-use super::app::{App, Focus, Screen};
+use super::app::{App, Focus, ListArea, Screen};
 use crate::config::Theme;
 
-pub fn draw(frame: &mut Frame, app: &App, theme: &Theme) {
+/// Draws the current screen and returns the rendered position of its scrollable list, so the
+/// caller can feed it back into [`App::on_mouse`] for scrollbar hit-testing.
+pub fn draw(frame: &mut Frame, app: &App, theme: &Theme) -> ListArea {
     match app.screen {
         Screen::Search => draw_search(frame, app, theme),
         Screen::Episodes => draw_episodes(frame, app, theme),
     }
+}
+
+/// Converts a ratatui layout rect into the plain [`ListArea`] `App` uses for hit-testing,
+/// keeping `App` itself free of `ratatui` types.
+fn to_list_area(rect: ratatui::layout::Rect) -> ListArea {
+    ListArea { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
 }
 
 /// Builds a bordered block styled per `theme`, brighter (accent-colored) when `focused`.
@@ -29,7 +37,7 @@ fn themed_block<'a>(theme: &Theme, title: &'a str, focused: bool) -> Block<'a> {
         .title(title)
 }
 
-fn draw_search(frame: &mut Frame, app: &App, theme: &Theme) {
+fn draw_search(frame: &mut Frame, app: &App, theme: &Theme) -> ListArea {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -78,9 +86,11 @@ fn draw_search(frame: &mut Frame, app: &App, theme: &Theme) {
     render_scrollbar(frame, chunks[1], app.results.len(), app.results_selected);
 
     frame.render_widget(status_line(app, theme), chunks[2]);
+
+    to_list_area(chunks[1])
 }
 
-fn draw_episodes(frame: &mut Frame, app: &App, theme: &Theme) {
+fn draw_episodes(frame: &mut Frame, app: &App, theme: &Theme) -> ListArea {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -141,6 +151,8 @@ fn draw_episodes(frame: &mut Frame, app: &App, theme: &Theme) {
     render_scrollbar(frame, chunks[1], app.episodes.len(), app.episodes_selected);
 
     frame.render_widget(status_line(app, theme), chunks[2]);
+
+    to_list_area(chunks[1])
 }
 
 /// Renders a vertical scrollbar over `area`'s right edge tracking `selected` out of `len`

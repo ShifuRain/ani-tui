@@ -71,6 +71,9 @@ interactive right away.
 | `q` | quit (while not typing) |
 | `ctrl+c` | quit, from anywhere |
 
+The scrollbar is also mouse-driven: click it to jump to that position, drag to scroll, or use
+the wheel.
+
 The same functionality is available as non-interactive subcommands for scripting. Anime are
 identified by `<source:id>`; `watch`/`ep-count`/`detail` need one from `search` first:
 
