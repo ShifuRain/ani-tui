@@ -36,10 +36,12 @@ jobs:
             os: windows-latest
             archive: zip
             asset_name: windows-x64
+            msi: true
           - target: aarch64-pc-windows-msvc
             os: windows-latest
             archive: zip
             asset_name: windows-arm64
+            msi: true
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -87,6 +89,28 @@ jobs:
         with:
           name: ani-tui-${{ matrix.asset_name }}
           path: ani-tui-${{ github.ref_name }}-${{ matrix.asset_name }}.${{ matrix.archive }}
+
+      - name: Install WiX Toolset
+        if: matrix.msi
+        shell: pwsh
+        run: choco install wixtoolset -y --no-progress
+
+      - name: Install cargo-wix
+        if: matrix.msi
+        run: cargo install cargo-wix --locked
+
+      - name: Package (msi)
+        if: matrix.msi
+        shell: bash
+        run: |
+          cargo wix --no-build --target ${{ matrix.target }} --nocapture --output target/wix/
+          mv target/wix/*.msi "ani-tui-${{ github.ref_name }}-${{ matrix.asset_name }}.msi"
+
+      - uses: actions/upload-artifact@v4
+        if: matrix.msi
+        with:
+          name: ani-tui-${{ matrix.asset_name }}-msi
+          path: ani-tui-${{ github.ref_name }}-${{ matrix.asset_name }}.msi
 
   release:
     needs: build
