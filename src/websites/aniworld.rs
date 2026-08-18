@@ -104,6 +104,7 @@ impl AnimeRepository for AniWorld {
                 };
                 episodes.push(anime_repo::Episode {
                     title,
+                    season: if season == 0 { None } else { Some(season) },
                     number,
                     id: anime_repo::GlobalId {
                         prefix: REPR_PREFIX.to_string(),

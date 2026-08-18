@@ -41,6 +41,11 @@ pub struct SearchResult {
 pub struct Episode {
     /// Title of the episode
     pub title: String,
+    /// Season number, for sources that group episodes by season (e.g. aniworld.to). `None`
+    /// for sources with no season concept (e.g. anidb.app, whose numbering is already
+    /// absolute). Numbers restart at 1 each season on sources that set this, so `number` alone
+    /// doesn't uniquely identify an episode on those sources — jump-to-episode needs both.
+    pub season: Option<u32>,
     /// Episode number, e.g. for jump-to-episode. Numbering can have gaps (specials, fillers),
     /// so this is not the same as this episode's position in the list.
     pub number: u32,

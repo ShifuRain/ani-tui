@@ -158,8 +158,8 @@ fn render_scrollbar(frame: &mut Frame, area: ratatui::layout::Rect, len: usize, 
 }
 
 fn status_line(app: &App, theme: &Theme) -> Paragraph<'static> {
-    let (text, color) = if let Some(digits) = &app.jump_input {
-        (format!("Jump to episode: {digits}_"), theme.accent)
+    let (text, color) = if let Some(buffer) = &app.jump_input {
+        (format!("Jump to episode (12 or S02E12): {buffer}_"), theme.accent)
     } else if let Some(error) = &app.error {
         (format!("Error: {error}"), theme.error)
     } else if let Some(status) = &app.status {
@@ -175,7 +175,7 @@ fn status_line(app: &App, theme: &Theme) -> Paragraph<'static> {
                 "up/down or j/k: navigate - enter: select - /: search - q: quit"
             }
             (Screen::Episodes, _) => {
-                "up/down or j/k: navigate - enter: play - x: toggle watched - g: jump to episode - esc: back - q: quit"
+                "up/down or j/k: navigate - enter: play - x: toggle watched - g: jump (12 or S02E12) - esc: back - q: quit"
             }
         };
         (hint.to_string(), theme.muted)

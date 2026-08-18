@@ -2,6 +2,30 @@ use ani_tui::anime_repo::{self, Detail, Episode, GlobalId, SearchResult, WatchLi
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use std::collections::HashSet;
 
+/// A parsed jump-to-episode target: either a plain episode number, or a season+episode pair
+/// for sources whose numbering restarts every season (see [`parse_jump_target`]).
+enum JumpTarget {
+    Number(u32),
+    SeasonEpisode(u32, u32),
+}
+
+/// Parses a jump-to-episode input buffer. Accepts a plain episode number (`"55"`), matched
+/// against [`Episode::number`] regardless of season — correct for sources with no season
+/// concept (anidb.app) or single-season shows. Also accepts `"S<season>E<number>"`
+/// (case-insensitive, e.g. `"s2e55"`), needed to disambiguate shows like Detective Conan on
+/// aniworld.to where every season's episodes restart at 1, so a plain number would match
+/// whichever season happens to come first in the list rather than the one the user meant.
+fn parse_jump_target(buffer: &str) -> Option<JumpTarget> {
+    let lower = buffer.to_ascii_lowercase();
+    match lower.strip_prefix('s') {
+        Some(rest) => {
+            let (season, number) = rest.split_once('e')?;
+            Some(JumpTarget::SeasonEpisode(season.parse().ok()?, number.parse().ok()?))
+        }
+        None => lower.parse().ok().map(JumpTarget::Number),
+    }
+}
+
 /// Which screen is currently shown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
@@ -209,22 +233,39 @@ impl App {
                     buffer.pop();
                 }
             }
-            KeyCode::Char(c) if c.is_ascii_digit() => {
+            KeyCode::Char(c) if c.is_ascii_digit() || matches!(c, 's' | 'S' | 'e' | 'E') => {
                 if let Some(buffer) = &mut self.jump_input {
                     buffer.push(c);
                 }
             }
             KeyCode::Enter => {
                 let buffer = self.jump_input.take().unwrap_or_default();
-                match buffer.parse::<u32>() {
-                    Ok(target) => match self.episodes.iter().position(|ep| ep.number == target) {
-                        Some(index) => {
-                            self.episodes_selected = index;
-                            self.error = None;
+                match parse_jump_target(&buffer) {
+                    Some(JumpTarget::Number(target)) => {
+                        match self.episodes.iter().position(|ep| ep.number == target) {
+                            Some(index) => {
+                                self.episodes_selected = index;
+                                self.error = None;
+                            }
+                            None => self.error = Some(format!("No episode {target}")),
                         }
-                        None => self.error = Some(format!("No episode {target}")),
-                    },
-                    Err(_) => self.error = Some("Enter an episode number".to_string()),
+                    }
+                    Some(JumpTarget::SeasonEpisode(season, number)) => {
+                        match self
+                            .episodes
+                            .iter()
+                            .position(|ep| ep.season == Some(season) && ep.number == number)
+                        {
+                            Some(index) => {
+                                self.episodes_selected = index;
+                                self.error = None;
+                            }
+                            None => {
+                                self.error = Some(format!("No episode S{season:02}E{number:02}"))
+                            }
+                        }
+                    }
+                    None => self.error = Some("Enter an episode number or SxxExx".to_string()),
                 }
             }
             _ => {}
@@ -312,6 +353,19 @@ mod tests {
     fn sample_episode(prefix: &str, raw: &str, number: u32) -> Episode {
         Episode {
             title: format!("Episode {number}"),
+            season: None,
+            number,
+            id: GlobalId {
+                prefix: prefix.to_string(),
+                raw: raw.to_string(),
+            },
+        }
+    }
+
+    fn sample_episode_in_season(prefix: &str, raw: &str, season: u32, number: u32) -> Episode {
+        Episode {
+            title: format!("S{season:02}E{number:02}"),
+            season: Some(season),
             number,
             id: GlobalId {
                 prefix: prefix.to_string(),
@@ -563,6 +617,53 @@ mod tests {
 
         assert_eq!(app.episodes_selected, 0, "selection shouldn't move on a miss");
         assert_eq!(app.error, Some("No episode 9".to_string()));
+    }
+
+    #[test]
+    fn jump_with_a_season_prefix_disambiguates_episodes_sharing_a_number() {
+        let mut app = App::new();
+        app.screen = Screen::Episodes;
+        app.episodes.push(sample_episode_in_season("AWT-1", "s1e5", 1, 5));
+        app.episodes.push(sample_episode_in_season("AWT-1", "s2e5", 2, 5));
+
+        app.on_key(key(KeyCode::Char('g')));
+        for c in "s2e5".chars() {
+            app.on_key(key(KeyCode::Char(c)));
+        }
+        app.on_key(key(KeyCode::Enter));
+
+        assert_eq!(app.jump_input, None);
+        assert_eq!(app.episodes_selected, 1, "should land on season 2's episode 5, not season 1's");
+        assert_eq!(app.error, None);
+    }
+
+    #[test]
+    fn jump_with_only_a_number_matches_the_first_episode_with_that_number() {
+        let mut app = App::new();
+        app.screen = Screen::Episodes;
+        app.episodes.push(sample_episode_in_season("AWT-1", "s1e5", 1, 5));
+        app.episodes.push(sample_episode_in_season("AWT-1", "s2e5", 2, 5));
+
+        app.on_key(key(KeyCode::Char('g')));
+        app.on_key(key(KeyCode::Char('5')));
+        app.on_key(key(KeyCode::Enter));
+
+        assert_eq!(app.episodes_selected, 0, "plain number matches by position in the list");
+    }
+
+    #[test]
+    fn jump_with_a_season_prefix_to_a_missing_episode_sets_an_error() {
+        let mut app = App::new();
+        app.screen = Screen::Episodes;
+        app.episodes.push(sample_episode_in_season("AWT-1", "s1e5", 1, 5));
+
+        app.on_key(key(KeyCode::Char('g')));
+        for c in "s2e5".chars() {
+            app.on_key(key(KeyCode::Char(c)));
+        }
+        app.on_key(key(KeyCode::Enter));
+
+        assert_eq!(app.error, Some("No episode S02E05".to_string()));
     }
 
     #[test]

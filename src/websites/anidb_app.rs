@@ -100,6 +100,7 @@ impl AnimeRepository for AnidbApp {
                 };
                 anime_repo::Episode {
                     title,
+                    season: None,
                     number,
                     id: anime_repo::GlobalId {
                         prefix: REPR_PREFIX.to_string(),

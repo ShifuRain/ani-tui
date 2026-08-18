@@ -66,7 +66,7 @@ interactive right away.
 | `down`/`tab` | move focus from the search box into results |
 | `/` | back to the search box |
 | `x` | toggle watched/unwatched on the selected episode |
-| `g` | jump to an episode by number (digits, `enter` to jump, `esc` to cancel) |
+| `g` | jump to an episode: type a number (`12`), or `S02E12` for shows whose numbering restarts each season, then `enter` (`esc` to cancel) |
 | `esc`/`backspace` | back a screen |
 | `q` | quit (while not typing) |
 | `ctrl+c` | quit, from anywhere |
