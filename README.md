@@ -9,11 +9,11 @@ watching anime in [mpv](https://mpv.io/). Its request chain for anidb.app is mod
 figuring it out.
 
 > **Note:** the only data source currently registered, anidb.app, sits behind a Cloudflare
-> managed challenge that this app's plain HTTP client can't pass — reliably getting through
-> would need browser-fingerprint-spoofing tooling (like curl-impersonate), which this project
-> isn't building. So `search`/`detail`/`ep-count`/`watch` won't return real results right now.
-> The app itself is otherwise in working order; it's just waiting on a source that's actually
-> reachable (tracked as follow-up work).
+> managed challenge. Requests are made with plain `curl`, which is usually enough, but if
+> Cloudflare starts blocking it for you, install a
+> [curl-impersonate](https://github.com/lexiforest/curl-impersonate) build (e.g.
+> `curl_chrome136`) and make sure it's on `PATH` — AniTUI will pick it up automatically and use
+> it instead, matching ani-cli's own fallback behavior.
 
 ## Requirements
 
