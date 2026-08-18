@@ -169,11 +169,13 @@
                 <ComponentRef Id='Path'/>
             </Feature>
 
+            <!-- Level 1000 (> the default INSTALLLEVEL of 1): listed and selectable in the
+                 Customize screen, but unchecked unless the user opts in. -->
             <Feature
                 Id='DesktopShortcutFeature'
                 Title='Desktop Shortcut'
                 Description='Add a shortcut to [ProductName] on the desktop.'
-                Level='1'
+                Level='1000'
                 Absent='allow'>
                 <ComponentRef Id='DesktopShortcut'/>
             </Feature>
