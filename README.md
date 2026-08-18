@@ -49,8 +49,10 @@ $ sudo mv ani-tui-*/ani-tui /usr/local/bin/
 $ Expand-Archive ani-tui-*.zip
 ```
 
-On Windows, the `.msi` installer is the more comfortable option: it installs `ani-tui` and adds
-it to your `PATH` for you, no unzipping required.
+On Windows, the `.msi` installer is the more comfortable option: it installs `ani-tui`, adds it
+to your `PATH`, and offers an optional desktop shortcut in the Customize step — no unzipping
+required. It isn't code-signed yet, so Windows SmartScreen may warn on first run; click
+**More info → Run anyway** to proceed.
 
 **From source**, with [Cargo](https://rustup.rs/):
 
