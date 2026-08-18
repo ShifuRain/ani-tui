@@ -89,7 +89,9 @@ pub enum Focus {
 /// Result of a background network action, delivered back to the event loop.
 pub enum AppEvent {
     SearchResults(Vec<(&'static str, anime_repo::Result<Vec<SearchResult>>)>),
-    Detail(anime_repo::Result<(Detail, Vec<Episode>)>),
+    /// Carries the series' id alongside the result so `on_app_event` can remember which series
+    /// is on screen, for manual refresh.
+    Detail(GlobalId, anime_repo::Result<(Detail, Vec<Episode>)>),
     /// Carries the episode's id alongside the result so `on_app_event` knows what to mark
     /// watched.
     WatchLinkResolved(GlobalId, anime_repo::Result<WatchLink>),
@@ -113,6 +115,9 @@ pub struct App {
     pub anime_languages: Vec<String>,
     pub episodes: Vec<Episode>,
     pub episodes_selected: usize,
+    /// Id of the series currently shown on [`Screen::Episodes`], if any — set from a successful
+    /// [`AppEvent::Detail`], used by the `r` (refresh) key to know what to re-fetch.
+    pub current_anime_id: Option<GlobalId>,
     /// Screen position of the currently visible list (results or episodes, whichever the
     /// active screen shows), refreshed on every frame draw. Used to hit-test mouse clicks/drags
     /// against the scrollbar. `None` before the first frame is drawn.
@@ -133,6 +138,9 @@ pub struct App {
     pub should_quit: bool,
     pub pending_search: Option<String>,
     pub pending_detail: Option<GlobalId>,
+    /// A manual refresh request (the `r` key): the event loop should bypass/invalidate the
+    /// series cache for this id and re-fetch, rather than serve a cached result.
+    pub pending_refresh: Option<GlobalId>,
     pub pending_watch: Option<GlobalId>,
     pub pending_mpv_link: Option<WatchLink>,
     /// A watched/unwatched change (from an auto-mark on launch, or a manual `x` toggle) that
@@ -154,6 +162,7 @@ impl App {
             anime_languages: Vec::new(),
             episodes: Vec::new(),
             episodes_selected: 0,
+            current_anime_id: None,
             list_area: None,
             dragging_scrollbar: false,
             watched: HashSet::new(),
@@ -164,6 +173,7 @@ impl App {
             should_quit: false,
             pending_search: None,
             pending_detail: None,
+            pending_refresh: None,
             pending_watch: None,
             pending_mpv_link: None,
             pending_watch_history: None,
@@ -339,6 +349,13 @@ impl App {
                 self.jump_input = Some(String::new());
                 self.error = None;
             }
+            KeyCode::Char('r') => {
+                if let Some(id) = self.current_anime_id.clone() {
+                    self.pending_refresh = Some(id);
+                    self.status = Some("Refreshing...".to_string());
+                    self.error = None;
+                }
+            }
             _ => {}
         }
     }
@@ -416,16 +433,17 @@ impl App {
                     None
                 };
             }
-            AppEvent::Detail(Ok((detail, episodes))) => {
+            AppEvent::Detail(id, Ok((detail, episodes))) => {
                 self.anime_title = detail.title;
                 self.anime_description = detail.description;
                 self.anime_languages = detail.languages;
                 self.episodes = episodes;
                 self.episodes_selected = 0;
+                self.current_anime_id = Some(id);
                 self.screen = Screen::Episodes;
                 self.status = None;
             }
-            AppEvent::Detail(Err(_)) => {
+            AppEvent::Detail(_, Err(_)) => {
                 self.error = Some("could not fetch anime details".to_string());
             }
             AppEvent::WatchLinkResolved(id, Ok(link)) => {
@@ -601,20 +619,47 @@ mod tests {
     #[test]
     fn detail_event_switches_to_episodes_screen() {
         let mut app = App::new();
-        app.on_app_event(AppEvent::Detail(Ok((
-            Detail {
-                title: "Bocchi the Rock!".to_string(),
-                description: "...".to_string(),
-                episode_count: 12,
-                languages: vec!["jpn".to_string()],
-            },
-            vec![sample_episode("ADB-1", "x#1", 1)],
-        ))));
+        let id = GlobalId { prefix: "ADB-1".to_string(), raw: "x".to_string() };
+        app.on_app_event(AppEvent::Detail(
+            id.clone(),
+            Ok((
+                Detail {
+                    title: "Bocchi the Rock!".to_string(),
+                    description: "...".to_string(),
+                    episode_count: 12,
+                    languages: vec!["jpn".to_string()],
+                },
+                vec![sample_episode("ADB-1", "x#1", 1)],
+            )),
+        ));
 
         assert_eq!(app.screen, Screen::Episodes);
         assert_eq!(app.anime_title, "Bocchi the Rock!");
         assert_eq!(app.anime_languages, vec!["jpn".to_string()]);
         assert_eq!(app.episodes.len(), 1);
+        assert_eq!(app.current_anime_id, Some(id));
+    }
+
+    #[test]
+    fn r_queues_a_refresh_for_the_current_series() {
+        let mut app = App::new();
+        app.screen = Screen::Episodes;
+        let id = GlobalId { prefix: "ADB-1".to_string(), raw: "x".to_string() };
+        app.current_anime_id = Some(id.clone());
+
+        app.on_key(key(KeyCode::Char('r')));
+
+        assert_eq!(app.pending_refresh, Some(id));
+    }
+
+    #[test]
+    fn r_without_a_current_series_does_nothing() {
+        let mut app = App::new();
+        app.screen = Screen::Episodes;
+
+        app.on_key(key(KeyCode::Char('r')));
+
+        assert_eq!(app.pending_refresh, None);
     }
 
     #[test]

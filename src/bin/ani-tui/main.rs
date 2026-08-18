@@ -1,4 +1,5 @@
 mod config;
+mod series_cache;
 mod tui;
 mod watch_history;
 

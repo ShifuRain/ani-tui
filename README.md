@@ -67,12 +67,18 @@ interactive right away.
 | `/` | back to the search box |
 | `x` | toggle watched/unwatched on the selected episode |
 | `g` | jump to an episode: type a number (`12`), or `S02E12` for shows whose numbering restarts each season, then `enter` (`esc` to cancel) |
+| `r` | refresh the current series (bypasses the cache below) |
 | `esc`/`backspace` | back a screen |
 | `q` | quit (while not typing) |
 | `ctrl+c` | quit, from anywhere |
 
 The scrollbar is also mouse-driven: click it to jump to that position, drag to scroll, or use
 the wheel.
+
+Re-opening a series you already looked at this session is instant — its detail and episode
+list stay cached in memory (the last 20 series). Press `r` on the episodes screen to bypass the
+cache and re-fetch, e.g. after a new episode airs. The cache isn't persisted to disk, so it's
+always empty on a fresh start.
 
 The same functionality is available as non-interactive subcommands for scripting. Anime are
 identified by `<source:id>`; `watch`/`ep-count`/`detail` need one from `search` first:

@@ -187,7 +187,7 @@ fn status_line(app: &App, theme: &Theme) -> Paragraph<'static> {
                 "up/down or j/k: navigate - enter: select - /: search - q: quit"
             }
             (Screen::Episodes, _) => {
-                "up/down or j/k: navigate - enter: play - x: toggle watched - g: jump (12 or S02E12) - esc: back - q: quit"
+                "up/down or j/k: navigate - enter: play - x: toggle watched - g: jump (12 or S02E12) - r: refresh - esc: back - q: quit"
             }
         };
         (hint.to_string(), theme.muted)

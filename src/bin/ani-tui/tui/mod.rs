@@ -15,6 +15,7 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use tokio::sync::mpsc;
 
 use crate::config::Theme;
+use crate::series_cache::SeriesCache;
 use crate::watch_history::WatchHistory;
 use app::{App, AppEvent};
 
@@ -60,6 +61,7 @@ async fn run_app(
 ) -> io::Result<()> {
     let mut app = App::new();
     app.watched = watch_history.watched_ids();
+    let series_cache = Arc::new(SeriesCache::new());
     let (tx, mut rx) = mpsc::unbounded_channel::<AppEvent>();
     let mut events = EventStream::new();
 
@@ -85,7 +87,7 @@ async fn run_app(
             }
         }
 
-        dispatch_pending(&mut app, &registry, &tx, watch_history);
+        dispatch_pending(&mut app, &registry, &series_cache, &tx, watch_history);
 
         if app.should_quit {
             break;
@@ -104,6 +106,7 @@ async fn run_app(
 fn dispatch_pending(
     app: &mut App,
     registry: &Arc<Registry>,
+    series_cache: &Arc<SeriesCache>,
     tx: &mpsc::UnboundedSender<AppEvent>,
     watch_history: &mut WatchHistory,
 ) {
@@ -116,17 +119,32 @@ fn dispatch_pending(
         });
     }
 
+    if let Some(id) = app.pending_refresh.take() {
+        series_cache.invalidate(&id);
+        app.pending_detail = Some(id);
+        app.loading = true;
+    }
+
     if let Some(id) = app.pending_detail.take() {
-        let registry = Arc::clone(registry);
-        let tx = tx.clone();
-        tokio::spawn(async move {
-            let (detail, episodes) = tokio::join!(registry.detail(&id), registry.list_eps(&id));
-            let combined = match (detail, episodes) {
-                (Ok(detail), Ok(episodes)) => Ok((detail, episodes)),
-                (Err(err), _) | (_, Err(err)) => Err(err),
-            };
-            let _ = tx.send(AppEvent::Detail(combined));
-        });
+        if let Some((detail, episodes)) = series_cache.get(&id) {
+            let _ = tx.send(AppEvent::Detail(id, Ok((detail, episodes))));
+        } else {
+            let registry = Arc::clone(registry);
+            let series_cache = Arc::clone(series_cache);
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let (detail, episodes) =
+                    tokio::join!(registry.detail(&id), registry.list_eps(&id));
+                let combined = match (detail, episodes) {
+                    (Ok(detail), Ok(episodes)) => {
+                        series_cache.insert(&id, detail.clone(), episodes.clone());
+                        Ok((detail, episodes))
+                    }
+                    (Err(err), _) | (_, Err(err)) => Err(err),
+                };
+                let _ = tx.send(AppEvent::Detail(id, combined));
+            });
+        }
     }
 
     if let Some(id) = app.pending_watch.take() {
