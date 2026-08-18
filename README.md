@@ -66,7 +66,9 @@ $ cargo install --path .
 
 Run `ani-tui` with no arguments for the TUI: type to search, arrow through results, drill into
 an episode list, hit enter to play. `mpv` launches in the background, so the TUI stays
-interactive right away.
+interactive right away. On startup, the TUI checks GitHub for a newer release and shows a note
+in the status bar if one's out — this check is silent and never blocks startup if it fails
+(e.g. offline).
 
 | Key | Action |
 | --- | --- |

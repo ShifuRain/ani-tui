@@ -98,6 +98,9 @@ pub enum AppEvent {
     /// The mpv process launched for the current episode has exited (however it exited —
     /// finished, was closed by the user, or crashed).
     PlaybackFinished,
+    /// A newer release than this build exists on GitHub, carrying its version (without the
+    /// leading `v`).
+    UpdateAvailable(String),
 }
 
 /// All interactive TUI state, plus "intents" (the `pending_*` fields) that the event loop
@@ -110,6 +113,9 @@ pub struct App {
     pub results: Vec<SearchResult>,
     pub results_selected: usize,
     pub warnings: Vec<String>,
+    /// Set once if a newer release than this build is found on GitHub at startup. Never
+    /// cleared — it stays visible (at low priority) for the rest of the session.
+    pub update_available: Option<String>,
     pub anime_title: String,
     pub anime_description: String,
     pub anime_languages: Vec<String>,
@@ -157,6 +163,7 @@ impl App {
             results: Vec::new(),
             results_selected: 0,
             warnings: Vec::new(),
+            update_available: None,
             anime_title: String::new(),
             anime_description: String::new(),
             anime_languages: Vec::new(),
@@ -459,6 +466,9 @@ impl App {
             AppEvent::PlaybackFinished => {
                 self.status = None;
             }
+            AppEvent::UpdateAvailable(version) => {
+                self.update_available = Some(version);
+            }
         }
     }
 }
@@ -727,6 +737,16 @@ mod tests {
         app.on_app_event(AppEvent::PlaybackFinished);
 
         assert_eq!(app.status, None);
+    }
+
+    #[test]
+    fn update_available_event_records_the_new_version() {
+        let mut app = App::new();
+        assert_eq!(app.update_available, None);
+
+        app.on_app_event(AppEvent::UpdateAvailable("9.9.9".to_string()));
+
+        assert_eq!(app.update_available, Some("9.9.9".to_string()));
     }
 
     #[test]

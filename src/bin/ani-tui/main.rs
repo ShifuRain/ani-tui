@@ -1,6 +1,7 @@
 mod config;
 mod series_cache;
 mod tui;
+mod update_check;
 mod watch_history;
 
 use ani_tui::{anime_repo::GlobalId, cli_args::*, registry::Registry};

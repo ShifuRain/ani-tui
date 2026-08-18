@@ -178,6 +178,14 @@ fn status_line(app: &App, theme: &Theme) -> Paragraph<'static> {
         (status.clone(), theme.accent)
     } else if !app.warnings.is_empty() {
         (app.warnings.join("; "), theme.warning)
+    } else if let Some(version) = &app.update_available {
+        (
+            format!(
+                "Update available: v{version} (you're on v{}) — see the Releases page",
+                env!("CARGO_PKG_VERSION")
+            ),
+            theme.warning,
+        )
     } else {
         let hint = match (app.screen, app.focus) {
             (Screen::Search, Focus::Query) => {

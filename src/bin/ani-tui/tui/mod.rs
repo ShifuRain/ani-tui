@@ -65,6 +65,15 @@ async fn run_app(
     let (tx, mut rx) = mpsc::unbounded_channel::<AppEvent>();
     let mut events = EventStream::new();
 
+    {
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            if let Some(version) = crate::update_check::check_for_update().await {
+                let _ = tx.send(AppEvent::UpdateAvailable(version));
+            }
+        });
+    }
+
     let mut list_area = None;
     terminal.draw(|frame| list_area = Some(ui::draw(frame, &app, theme)))?;
     app.list_area = list_area;
