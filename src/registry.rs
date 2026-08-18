@@ -1,7 +1,9 @@
 use crate::anime_repo::{
     AnimeRepository, AnimeRepositoryError, Detail, Episode, GlobalId, Result, SearchResult,
+    WatchLink,
 };
 use crate::websites::anidb_app::AnidbApp;
+use crate::websites::aniworld::AniWorld;
 use futures::future::join_all;
 
 /// Holds every registered [`AnimeRepository`] and routes requests to the right one by
@@ -15,7 +17,7 @@ impl Registry {
     /// Builds a registry with every source this build supports.
     pub fn new() -> Self {
         Self {
-            sources: vec![Box::new(AnidbApp::new())],
+            sources: vec![Box::new(AnidbApp::new()), Box::new(AniWorld::new())],
         }
     }
 
@@ -61,7 +63,7 @@ impl Registry {
     }
 
     /// Resolves a watch link for `id`, routed to the source that produced it.
-    pub async fn watch_link(&self, id: &GlobalId) -> Result<String> {
+    pub async fn watch_link(&self, id: &GlobalId) -> Result<WatchLink> {
         self.find(&id.prefix)
             .ok_or(AnimeRepositoryError::Unsupported)?
             .watch_link(&id.raw)
@@ -83,6 +85,7 @@ mod tests {
     fn finds_registered_source_by_prefix() {
         let registry = Registry::new();
         assert!(registry.find("ADB-1").is_some());
+        assert!(registry.find("AWT-1").is_some());
         assert!(registry.find("no-such-source").is_none());
     }
 
@@ -120,11 +123,15 @@ mod tests {
                 title: "mock".to_string(),
                 description: String::new(),
                 episode_count: 0,
+                languages: Vec::new(),
             })
         }
 
-        async fn watch_link(&self, _raw_id: &str) -> Result<String> {
-            Ok("mock-link".to_string())
+        async fn watch_link(&self, _raw_id: &str) -> Result<WatchLink> {
+            Ok(WatchLink {
+                url: "mock-link".to_string(),
+                headers: Vec::new(),
+            })
         }
     }
 

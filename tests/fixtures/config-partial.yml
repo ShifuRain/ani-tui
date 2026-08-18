@@ -1,0 +1,6 @@
+# Only overrides a subset of fields, to test that everything else keeps its built-in default.
+theme:
+  accent: "#112233"
+  sources:
+    ADB-1:
+      color: "#445566"

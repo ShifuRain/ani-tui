@@ -19,6 +19,10 @@ pub mod registry;
 pub mod websites {
     /// <https://anidb.app> API
     pub mod anidb_app;
+    /// <https://aniworld.to> API
+    pub mod aniworld;
+    /// Shared `curl`-based HTTP client used by every source
+    pub mod curl_client;
 }
 
 #[macro_use(async_trait)]

@@ -1,6 +1,8 @@
+mod config;
 mod tui;
 
 use ani_tui::{anime_repo::GlobalId, cli_args::*, registry::Registry};
+use config::Config;
 
 use clap::Parser;
 use std::process::{ExitCode, Stdio};
@@ -14,9 +16,12 @@ async fn main() -> ExitCode {
 
     let result = match args.command {
         Some(command) => run(command, &registry).await,
-        None => tui::run(Arc::new(registry))
-            .await
-            .map_err(|e| e.to_string()),
+        None => {
+            let theme = Config::load().theme;
+            tui::run(Arc::new(registry), theme)
+                .await
+                .map_err(|e| e.to_string())
+        }
     };
 
     if let Err(message) = result {
@@ -74,9 +79,15 @@ async fn run(command: Commands, registry: &Registry) -> Result<(), String> {
                 .await
                 .map_err(|_| "could not fetch anime details")?;
 
+            let languages = if detail.languages.is_empty() {
+                "unknown".to_string()
+            } else {
+                detail.languages.join(", ")
+            };
             println!(
                 r#"{title}
 {eps} episodes, {ident}
+Languages: {languages}
 
 {description}"#,
                 title = detail.title,
@@ -102,8 +113,12 @@ async fn run(command: Commands, registry: &Registry) -> Result<(), String> {
                 .map_err(|_| "could not resolve a watch link")?;
 
             println!("Launching MPV");
-            let mut mpv = Command::new("mpv")
-                .arg(link)
+            let mut mpv_cmd = Command::new("mpv");
+            if let Some(header_fields) = link.mpv_header_fields() {
+                mpv_cmd.arg(format!("--http-header-fields={header_fields}"));
+            }
+            let mut mpv = mpv_cmd
+                .arg(&link.url)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())

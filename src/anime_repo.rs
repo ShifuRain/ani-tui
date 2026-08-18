@@ -54,6 +54,37 @@ pub struct Detail {
     pub description: String,
     /// Number of episodes
     pub episode_count: usize,
+    /// Available audio/subtitle languages, informational only (there's no way to request a
+    /// specific one yet). Empty if the source couldn't determine any.
+    pub languages: Vec<String>,
+}
+
+/// A resolved, playable link to an episode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WatchLink {
+    /// Direct URL to hand to the video player
+    pub url: String,
+    /// Extra HTTP headers (name, value) the player must send when requesting `url`, e.g. a
+    /// `Referer` some hosters require to actually serve the stream rather than just resolving
+    /// the link. Empty if none are needed.
+    pub headers: Vec<(String, String)>,
+}
+
+impl WatchLink {
+    /// Formats [`Self::headers`] as mpv's `--http-header-fields=...` argument value, or `None`
+    /// if there are no headers to send.
+    pub fn mpv_header_fields(&self) -> Option<String> {
+        if self.headers.is_empty() {
+            return None;
+        }
+        Some(
+            self.headers
+                .iter()
+                .map(|(name, value)| format!("{name}: {value}"))
+                .collect::<Vec<_>>()
+                .join(","),
+        )
+    }
 }
 
 /// Interface for all anime search and watch implementors. Unlike an earlier version of this
@@ -76,7 +107,7 @@ pub trait AnimeRepository: Send + Sync {
     async fn detail(&self, raw_id: &str) -> Result<Detail>;
     /// Returns a watch link that can be played in a video player. `raw_id` is the `raw` part
     /// of a [`GlobalId`] this source produced.
-    async fn watch_link(&self, raw_id: &str) -> Result<String>;
+    async fn watch_link(&self, raw_id: &str) -> Result<WatchLink>;
 }
 
 /// An error returned from [`AnimeRepository`]
@@ -114,5 +145,26 @@ mod tests {
         assert!(GlobalId::from_repr("not-a-valid-repr").is_none());
         assert!(GlobalId::from_repr("<no-colon>").is_none());
         assert!(GlobalId::from_repr("missing-brackets:raw").is_none());
+    }
+
+    #[test]
+    fn mpv_header_fields_are_none_when_empty() {
+        let link = WatchLink { url: "https://example.com".to_string(), headers: vec![] };
+        assert_eq!(link.mpv_header_fields(), None);
+    }
+
+    #[test]
+    fn mpv_header_fields_joins_multiple_headers() {
+        let link = WatchLink {
+            url: "https://example.com".to_string(),
+            headers: vec![
+                ("Referer".to_string(), "https://example.com/".to_string()),
+                ("X-Custom".to_string(), "value".to_string()),
+            ],
+        };
+        assert_eq!(
+            link.mpv_header_fields().as_deref(),
+            Some("Referer: https://example.com/,X-Custom: value")
+        );
     }
 }

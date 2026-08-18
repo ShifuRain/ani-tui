@@ -14,10 +14,11 @@ use futures::StreamExt;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use tokio::sync::mpsc;
 
+use crate::config::Theme;
 use app::{App, AppEvent};
 
 /// Runs the interactive TUI until the user quits, then restores the terminal.
-pub async fn run(registry: Arc<Registry>) -> io::Result<()> {
+pub async fn run(registry: Arc<Registry>, theme: Theme) -> io::Result<()> {
     install_panic_hook();
 
     enable_raw_mode()?;
@@ -26,7 +27,7 @@ pub async fn run(registry: Arc<Registry>) -> io::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run_app(&mut terminal, registry).await;
+    let result = run_app(&mut terminal, registry, &theme).await;
 
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
@@ -49,12 +50,13 @@ fn install_panic_hook() {
 async fn run_app(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     registry: Arc<Registry>,
+    theme: &Theme,
 ) -> io::Result<()> {
     let mut app = App::new();
     let (tx, mut rx) = mpsc::unbounded_channel::<AppEvent>();
     let mut events = EventStream::new();
 
-    terminal.draw(|frame| ui::draw(frame, &app))?;
+    terminal.draw(|frame| ui::draw(frame, &app, theme))?;
 
     loop {
         tokio::select! {
@@ -79,7 +81,7 @@ async fn run_app(
             break;
         }
 
-        terminal.draw(|frame| ui::draw(frame, &app))?;
+        terminal.draw(|frame| ui::draw(frame, &app, theme))?;
     }
 
     Ok(())
@@ -120,8 +122,12 @@ fn dispatch_pending(app: &mut App, registry: &Arc<Registry>, tx: &mpsc::Unbounde
     }
 
     if let Some(link) = app.pending_mpv_link.take() {
-        let spawned = tokio::process::Command::new("mpv")
-            .arg(&link)
+        let mut mpv = tokio::process::Command::new("mpv");
+        if let Some(header_fields) = link.mpv_header_fields() {
+            mpv.arg(format!("--http-header-fields={header_fields}"));
+        }
+        let spawned = mpv
+            .arg(&link.url)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())

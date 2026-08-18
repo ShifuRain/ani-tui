@@ -1,4 +1,4 @@
-use ani_tui::anime_repo::{self, Detail, Episode, GlobalId, SearchResult};
+use ani_tui::anime_repo::{self, Detail, Episode, GlobalId, SearchResult, WatchLink};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 /// Which screen is currently shown.
@@ -19,7 +19,7 @@ pub enum Focus {
 pub enum AppEvent {
     SearchResults(Vec<(&'static str, anime_repo::Result<Vec<SearchResult>>)>),
     Detail(anime_repo::Result<(Detail, Vec<Episode>)>),
-    WatchLinkResolved(anime_repo::Result<String>),
+    WatchLinkResolved(anime_repo::Result<WatchLink>),
 }
 
 /// All interactive TUI state, plus "intents" (the `pending_*` fields) that the event loop
@@ -34,6 +34,7 @@ pub struct App {
     pub warnings: Vec<String>,
     pub anime_title: String,
     pub anime_description: String,
+    pub anime_languages: Vec<String>,
     pub episodes: Vec<Episode>,
     pub episodes_selected: usize,
     pub status: Option<String>,
@@ -43,7 +44,7 @@ pub struct App {
     pub pending_search: Option<String>,
     pub pending_detail: Option<GlobalId>,
     pub pending_watch: Option<GlobalId>,
-    pub pending_mpv_link: Option<String>,
+    pub pending_mpv_link: Option<WatchLink>,
 }
 
 impl App {
@@ -57,6 +58,7 @@ impl App {
             warnings: Vec::new(),
             anime_title: String::new(),
             anime_description: String::new(),
+            anime_languages: Vec::new(),
             episodes: Vec::new(),
             episodes_selected: 0,
             status: None,
@@ -187,6 +189,7 @@ impl App {
             AppEvent::Detail(Ok((detail, episodes))) => {
                 self.anime_title = detail.title;
                 self.anime_description = detail.description;
+                self.anime_languages = detail.languages;
                 self.episodes = episodes;
                 self.episodes_selected = 0;
                 self.screen = Screen::Episodes;
@@ -340,6 +343,7 @@ mod tests {
                 title: "Bocchi the Rock!".to_string(),
                 description: "...".to_string(),
                 episode_count: 12,
+                languages: vec!["jpn".to_string()],
             },
             vec![Episode {
                 title: "Episode 1".to_string(),
@@ -352,6 +356,7 @@ mod tests {
 
         assert_eq!(app.screen, Screen::Episodes);
         assert_eq!(app.anime_title, "Bocchi the Rock!");
+        assert_eq!(app.anime_languages, vec!["jpn".to_string()]);
         assert_eq!(app.episodes.len(), 1);
     }
 
@@ -389,12 +394,15 @@ mod tests {
     #[test]
     fn watch_link_resolved_sets_pending_mpv_link() {
         let mut app = App::new();
-        app.on_app_event(AppEvent::WatchLinkResolved(Ok(
-            "https://example.com/x.m3u8".to_string(),
-        )));
+        app.on_app_event(AppEvent::WatchLinkResolved(Ok(WatchLink {
+            url: "https://example.com/x.m3u8".to_string(),
+            headers: vec![("Referer".to_string(), "https://example.com/".to_string())],
+        })));
+        let link = app.pending_mpv_link.expect("watch link should be pending");
+        assert_eq!(link.url, "https://example.com/x.m3u8");
         assert_eq!(
-            app.pending_mpv_link.as_deref(),
-            Some("https://example.com/x.m3u8")
+            link.mpv_header_fields().as_deref(),
+            Some("Referer: https://example.com/")
         );
     }
 }
