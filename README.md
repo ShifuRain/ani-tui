@@ -1,7 +1,12 @@
+<img src="assets/logo.svg" width="64" height="64" align="left" alt="ani-tui logo">
+
 # AniTUI
 
 [![CI](https://github.com/ShifuRain/ani-tui/actions/workflows/ci.yml/badge.svg)](https://github.com/ShifuRain/ani-tui/actions/workflows/ci.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
+
+<br clear="left">
+
 
 AniTUI is a terminal app (interactive TUI, or scriptable CLI) for searching and watching anime
 in [mpv](https://mpv.io/). It searches multiple sources at once, merging results with a
