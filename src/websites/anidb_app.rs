@@ -3,8 +3,12 @@ use crate::websites::curl_client::{encode_query_param, CurlClient, QueryError};
 use easy_scraper::Pattern;
 use regex::Regex;
 use serde::Deserialize;
+use std::collections::HashMap;
 
 use QueryError::{InvalidLink, ParsingError};
+
+/// Per-episode titles via MyAnimeList, since anidb.app itself doesn't expose any.
+mod jikan;
 
 /// A link to the website
 pub const BASE_URL: &str = "https://anidb.app";
@@ -33,6 +37,22 @@ impl AnidbApp {
 impl Default for AnidbApp {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl AnidbApp {
+    /// Best-effort per-episode titles via MyAnimeList (through [`jikan`]), keyed by episode
+    /// number. Empty if the detail page has no MAL link, or the lookup fails for any reason —
+    /// titles are cosmetic, never a hard dependency.
+    async fn episode_titles(&self, raw_id: &str) -> HashMap<u32, String> {
+        let url = format!("{BASE_URL}/anime/{raw_id}");
+        let Ok(html) = self.client.get(&url, &[]).await else {
+            return HashMap::new();
+        };
+        let Some(mal_id) = jikan::extract_mal_id(&html) else {
+            return HashMap::new();
+        };
+        jikan::episode_titles(&self.client, mal_id).await
     }
 }
 
@@ -66,15 +86,26 @@ impl AnimeRepository for AnidbApp {
 
         let url = format!("{BASE_URL}/api/frontend/anime/{numeric_id}/episodes");
         let json = self.client.get(&url, &[]).await?;
+        let entries = parse_episodes_json(&json)?;
 
-        Ok(parse_episodes_json(&json)?
+        let titles = self.episode_titles(raw_id).await;
+
+        Ok(entries
             .into_iter()
-            .map(|ep| anime_repo::Episode {
-                title: format!("Episode {}", ep.number),
-                id: anime_repo::GlobalId {
-                    prefix: REPR_PREFIX.to_string(),
-                    raw: ep.id.to_string(),
-                },
+            .map(|ep| {
+                let number = ep.number as u32;
+                let title = match titles.get(&number) {
+                    Some(real_title) => format!("Episode {number} — {real_title}"),
+                    None => format!("Episode {number}"),
+                };
+                anime_repo::Episode {
+                    title,
+                    number,
+                    id: anime_repo::GlobalId {
+                        prefix: REPR_PREFIX.to_string(),
+                        raw: ep.id.to_string(),
+                    },
+                }
             })
             .collect())
     }

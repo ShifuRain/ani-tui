@@ -1,5 +1,6 @@
 use ani_tui::anime_repo::{self, Detail, Episode, GlobalId, SearchResult, WatchLink};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use std::collections::HashSet;
 
 /// Which screen is currently shown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,7 +20,12 @@ pub enum Focus {
 pub enum AppEvent {
     SearchResults(Vec<(&'static str, anime_repo::Result<Vec<SearchResult>>)>),
     Detail(anime_repo::Result<(Detail, Vec<Episode>)>),
-    WatchLinkResolved(anime_repo::Result<WatchLink>),
+    /// Carries the episode's id alongside the result so `on_app_event` knows what to mark
+    /// watched.
+    WatchLinkResolved(GlobalId, anime_repo::Result<WatchLink>),
+    /// The mpv process launched for the current episode has exited (however it exited —
+    /// finished, was closed by the user, or crashed).
+    PlaybackFinished,
 }
 
 /// All interactive TUI state, plus "intents" (the `pending_*` fields) that the event loop
@@ -37,6 +43,12 @@ pub struct App {
     pub anime_languages: Vec<String>,
     pub episodes: Vec<Episode>,
     pub episodes_selected: usize,
+    /// Watched episode ids ([`GlobalId::as_repr`] strings), hydrated once at startup from
+    /// persisted watch history and kept in sync with it via [`Self::pending_watch_history`].
+    pub watched: HashSet<String>,
+    /// Numeric-entry buffer for jump-to-episode. `None` = normal browsing, `Some(digits)` =
+    /// actively typing a target episode number.
+    pub jump_input: Option<String>,
     pub status: Option<String>,
     pub error: Option<String>,
     pub loading: bool,
@@ -45,6 +57,9 @@ pub struct App {
     pub pending_detail: Option<GlobalId>,
     pub pending_watch: Option<GlobalId>,
     pub pending_mpv_link: Option<WatchLink>,
+    /// A watched/unwatched change (from an auto-mark on launch, or a manual `x` toggle) that
+    /// still needs to be persisted to disk.
+    pub pending_watch_history: Option<(GlobalId, bool)>,
 }
 
 impl App {
@@ -61,6 +76,8 @@ impl App {
             anime_languages: Vec::new(),
             episodes: Vec::new(),
             episodes_selected: 0,
+            watched: HashSet::new(),
+            jump_input: None,
             status: None,
             error: None,
             loading: false,
@@ -69,6 +86,7 @@ impl App {
             pending_detail: None,
             pending_watch: None,
             pending_mpv_link: None,
+            pending_watch_history: None,
         }
     }
 
@@ -135,6 +153,11 @@ impl App {
     }
 
     fn on_key_episodes(&mut self, key: KeyEvent) {
+        if self.jump_input.is_some() {
+            self.on_key_episodes_jump(key);
+            return;
+        }
+
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
             KeyCode::Esc | KeyCode::Backspace => {
@@ -155,6 +178,53 @@ impl App {
                     self.pending_watch = Some(episode.id.clone());
                     self.status = Some("Resolving watch link...".to_string());
                     self.error = None;
+                }
+            }
+            KeyCode::Char('x') => {
+                if let Some(episode) = self.episodes.get(self.episodes_selected) {
+                    let repr = episode.id.as_repr();
+                    let now_watched = if self.watched.remove(&repr) {
+                        false
+                    } else {
+                        self.watched.insert(repr);
+                        true
+                    };
+                    self.pending_watch_history = Some((episode.id.clone(), now_watched));
+                }
+            }
+            KeyCode::Char('g') => {
+                self.jump_input = Some(String::new());
+                self.error = None;
+            }
+            _ => {}
+        }
+    }
+
+    /// Handles a key press while [`Self::jump_input`] is active (jump-to-episode mode).
+    fn on_key_episodes_jump(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => self.jump_input = None,
+            KeyCode::Backspace => {
+                if let Some(buffer) = &mut self.jump_input {
+                    buffer.pop();
+                }
+            }
+            KeyCode::Char(c) if c.is_ascii_digit() => {
+                if let Some(buffer) = &mut self.jump_input {
+                    buffer.push(c);
+                }
+            }
+            KeyCode::Enter => {
+                let buffer = self.jump_input.take().unwrap_or_default();
+                match buffer.parse::<u32>() {
+                    Ok(target) => match self.episodes.iter().position(|ep| ep.number == target) {
+                        Some(index) => {
+                            self.episodes_selected = index;
+                            self.error = None;
+                        }
+                        None => self.error = Some(format!("No episode {target}")),
+                    },
+                    Err(_) => self.error = Some("Enter an episode number".to_string()),
                 }
             }
             _ => {}
@@ -198,12 +268,17 @@ impl App {
             AppEvent::Detail(Err(_)) => {
                 self.error = Some("could not fetch anime details".to_string());
             }
-            AppEvent::WatchLinkResolved(Ok(link)) => {
+            AppEvent::WatchLinkResolved(id, Ok(link)) => {
                 self.status = Some("Launching mpv...".to_string());
+                self.watched.insert(id.as_repr());
+                self.pending_watch_history = Some((id, true));
                 self.pending_mpv_link = Some(link);
             }
-            AppEvent::WatchLinkResolved(Err(_)) => {
+            AppEvent::WatchLinkResolved(_, Err(_)) => {
                 self.error = Some("could not resolve a watch link".to_string());
+                self.status = None;
+            }
+            AppEvent::PlaybackFinished => {
                 self.status = None;
             }
         }
@@ -227,6 +302,17 @@ mod tests {
     fn sample_result(prefix: &str, raw: &str, title: &str) -> SearchResult {
         SearchResult {
             title: title.to_string(),
+            id: GlobalId {
+                prefix: prefix.to_string(),
+                raw: raw.to_string(),
+            },
+        }
+    }
+
+    fn sample_episode(prefix: &str, raw: &str, number: u32) -> Episode {
+        Episode {
+            title: format!("Episode {number}"),
+            number,
             id: GlobalId {
                 prefix: prefix.to_string(),
                 raw: raw.to_string(),
@@ -345,13 +431,7 @@ mod tests {
                 episode_count: 12,
                 languages: vec!["jpn".to_string()],
             },
-            vec![Episode {
-                title: "Episode 1".to_string(),
-                id: GlobalId {
-                    prefix: "ADB-1".to_string(),
-                    raw: "x#1".to_string(),
-                },
-            }],
+            vec![sample_episode("ADB-1", "x#1", 1)],
         ))));
 
         assert_eq!(app.screen, Screen::Episodes);
@@ -365,13 +445,7 @@ mod tests {
         let mut app = App::new();
         app.query = "bocchi".to_string();
         app.screen = Screen::Episodes;
-        app.episodes.push(Episode {
-            title: "Episode 1".to_string(),
-            id: GlobalId {
-                prefix: "ADB-1".to_string(),
-                raw: "x#1".to_string(),
-            },
-        });
+        app.episodes.push(sample_episode("ADB-1", "x#1", 1));
 
         app.on_key(key(KeyCode::Esc));
 
@@ -394,15 +468,115 @@ mod tests {
     #[test]
     fn watch_link_resolved_sets_pending_mpv_link() {
         let mut app = App::new();
-        app.on_app_event(AppEvent::WatchLinkResolved(Ok(WatchLink {
-            url: "https://example.com/x.m3u8".to_string(),
-            headers: vec![("Referer".to_string(), "https://example.com/".to_string())],
-        })));
+        let id = GlobalId { prefix: "ADB-1".to_string(), raw: "x#1".to_string() };
+        app.on_app_event(AppEvent::WatchLinkResolved(
+            id.clone(),
+            Ok(WatchLink {
+                url: "https://example.com/x.m3u8".to_string(),
+                headers: vec![("Referer".to_string(), "https://example.com/".to_string())],
+            }),
+        ));
         let link = app.pending_mpv_link.expect("watch link should be pending");
         assert_eq!(link.url, "https://example.com/x.m3u8");
         assert_eq!(
             link.mpv_header_fields().as_deref(),
             Some("Referer: https://example.com/")
         );
+    }
+
+    #[test]
+    fn watch_link_resolved_marks_episode_watched() {
+        let mut app = App::new();
+        let id = GlobalId { prefix: "ADB-1".to_string(), raw: "x#1".to_string() };
+        app.on_app_event(AppEvent::WatchLinkResolved(
+            id.clone(),
+            Ok(WatchLink { url: "https://example.com".to_string(), headers: vec![] }),
+        ));
+
+        assert!(app.watched.contains(&id.as_repr()));
+        assert_eq!(app.pending_watch_history, Some((id, true)));
+    }
+
+    #[test]
+    fn playback_finished_clears_the_launching_status() {
+        let mut app = App::new();
+        app.status = Some("Launching mpv...".to_string());
+
+        app.on_app_event(AppEvent::PlaybackFinished);
+
+        assert_eq!(app.status, None);
+    }
+
+    #[test]
+    fn x_toggles_watched_status_on_the_selected_episode() {
+        let mut app = App::new();
+        app.screen = Screen::Episodes;
+        app.episodes.push(sample_episode("ADB-1", "x#1", 1));
+        let repr = app.episodes[0].id.as_repr();
+
+        app.on_key(key(KeyCode::Char('x')));
+        assert!(app.watched.contains(&repr));
+        assert_eq!(
+            app.pending_watch_history,
+            Some((app.episodes[0].id.clone(), true))
+        );
+
+        app.on_key(key(KeyCode::Char('x')));
+        assert!(!app.watched.contains(&repr));
+        assert_eq!(
+            app.pending_watch_history,
+            Some((app.episodes[0].id.clone(), false))
+        );
+    }
+
+    #[test]
+    fn g_then_digits_then_enter_jumps_to_the_matching_episode_number() {
+        let mut app = App::new();
+        app.screen = Screen::Episodes;
+        app.episodes.push(sample_episode("ADB-1", "x#1", 1));
+        app.episodes.push(sample_episode("ADB-1", "x#500", 500));
+        app.episodes.push(sample_episode("ADB-1", "x#2", 2));
+
+        app.on_key(key(KeyCode::Char('g')));
+        assert_eq!(app.jump_input.as_deref(), Some(""));
+
+        app.on_key(key(KeyCode::Char('5')));
+        app.on_key(key(KeyCode::Char('0')));
+        app.on_key(key(KeyCode::Char('0')));
+        assert_eq!(app.jump_input.as_deref(), Some("500"));
+
+        app.on_key(key(KeyCode::Enter));
+        assert_eq!(app.jump_input, None);
+        assert_eq!(app.episodes_selected, 1);
+        assert_eq!(app.error, None);
+    }
+
+    #[test]
+    fn jump_to_a_missing_episode_number_sets_an_error() {
+        let mut app = App::new();
+        app.screen = Screen::Episodes;
+        app.episodes.push(sample_episode("ADB-1", "x#1", 1));
+
+        app.on_key(key(KeyCode::Char('g')));
+        app.on_key(key(KeyCode::Char('9')));
+        app.on_key(key(KeyCode::Enter));
+
+        assert_eq!(app.episodes_selected, 0, "selection shouldn't move on a miss");
+        assert_eq!(app.error, Some("No episode 9".to_string()));
+    }
+
+    #[test]
+    fn esc_cancels_jump_mode_without_moving_selection() {
+        let mut app = App::new();
+        app.screen = Screen::Episodes;
+        app.episodes.push(sample_episode("ADB-1", "x#1", 1));
+        app.episodes.push(sample_episode("ADB-1", "x#2", 2));
+
+        app.on_key(key(KeyCode::Char('g')));
+        app.on_key(key(KeyCode::Char('2')));
+        app.on_key(key(KeyCode::Esc));
+
+        assert_eq!(app.jump_input, None);
+        assert_eq!(app.episodes_selected, 0);
     }
 }

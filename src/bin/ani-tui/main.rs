@@ -1,11 +1,13 @@
 mod config;
 mod tui;
+mod watch_history;
 
 use ani_tui::{anime_repo::GlobalId, cli_args::*, registry::Registry};
 use config::Config;
+use watch_history::WatchHistory;
 
 use clap::Parser;
-use std::process::{ExitCode, Stdio};
+use std::process::ExitCode;
 use std::sync::Arc;
 use tokio::process::Command;
 
@@ -18,7 +20,8 @@ async fn main() -> ExitCode {
         Some(command) => run(command, &registry).await,
         None => {
             let theme = Config::load().theme;
-            tui::run(Arc::new(registry), theme)
+            let watch_history = WatchHistory::load();
+            tui::run(Arc::new(registry), theme, watch_history)
                 .await
                 .map_err(|e| e.to_string())
         }
@@ -111,17 +114,19 @@ Languages: {languages}
                 .watch_link(&episode.id)
                 .await
                 .map_err(|_| "could not resolve a watch link")?;
+            let mut watch_history = WatchHistory::load();
+            watch_history.set_watched(&episode.id, true);
 
             println!("Launching MPV");
             let mut mpv_cmd = Command::new("mpv");
             if let Some(header_fields) = link.mpv_header_fields() {
                 mpv_cmd.arg(format!("--http-header-fields={header_fields}"));
             }
+            // Inherited, not piped: this is a foreground, blocking command with no TUI of our
+            // own to protect, so let mpv use the real terminal directly — the user sees its
+            // actual output, and there's no pipe buffer to fill up unread while we wait.
             let mut mpv = mpv_cmd
                 .arg(&link.url)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
                 .spawn()
                 .map_err(|_| "could not launch mpv: is it installed and on PATH?")?;
             mpv.wait().await.map_err(|_| "mpv exited unexpectedly")?;

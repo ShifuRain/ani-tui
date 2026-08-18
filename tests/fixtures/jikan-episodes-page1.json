@@ -1,0 +1,28 @@
+{
+  "pagination": {
+    "last_visible_page": 1,
+    "has_next_page": false
+  },
+  "data": [
+    {
+      "mal_id": 1,
+      "url": "https://myanimelist.net/anime/16498/Shingeki_no_Kyojin/episode/1",
+      "title": "To You, 2,000 Years in the Future: The Fall of Shiganshina (1)",
+      "title_japanese": "二千年後の君へ",
+      "title_romanji": "Nisen-nengo no Kimi e",
+      "aired": "2013-04-07T00:00:00+00:00",
+      "filler": false,
+      "recap": false
+    },
+    {
+      "mal_id": 2,
+      "url": "https://myanimelist.net/anime/16498/Shingeki_no_Kyojin/episode/2",
+      "title": "That Day: The Fall of Shiganshina (2)",
+      "title_japanese": "その日",
+      "title_romanji": "Sono Hi",
+      "aired": "2013-04-14T00:00:00+00:00",
+      "filler": false,
+      "recap": false
+    }
+  ]
+}

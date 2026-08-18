@@ -41,6 +41,9 @@ pub struct SearchResult {
 pub struct Episode {
     /// Title of the episode
     pub title: String,
+    /// Episode number, e.g. for jump-to-episode. Numbering can have gaps (specials, fillers),
+    /// so this is not the same as this episode's position in the list.
+    pub number: u32,
     /// ID that can be passed to [`AnimeRepository::watch_link`]
     pub id: GlobalId,
 }

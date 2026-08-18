@@ -3,28 +3,27 @@
 [![CI](https://github.com/ShifuRain/ani-tui/actions/workflows/ci.yml/badge.svg)](https://github.com/ShifuRain/ani-tui/actions/workflows/ci.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
 
-AniTUI is an interactive terminal app (with a scriptable CLI mode too) for searching and
-watching anime in [mpv](https://mpv.io/). It searches multiple sources at once and merges the
-results; each result gets a distinctly colored `[Label]` badge in the TUI so it's obvious at a
-glance which source (and likely language) it came from. Its request chain for anidb.app is
-modeled on
+AniTUI is a terminal app (interactive TUI, or scriptable CLI) for searching and watching anime
+in [mpv](https://mpv.io/). It searches multiple sources at once, merging results with a
+colored `[Label]` badge per source so it's clear at a glance where (and in what language) each
+result comes from:
+
+- **[anidb.app](https://anidb.app)** (`ADB-1`) — Japanese audio.
+- **[aniworld.to](https://aniworld.to)** (`AWT-1`) — German aggregator; German dub, then
+  German sub, then English sub, whichever's available first.
+
+Real per-episode titles are shown where available (aniworld.to natively; anidb.app via
+[MyAnimeList](https://myanimelist.net)'s community [Jikan](https://jikan.moe/) API), episodes
+you've watched get a `✓`, and you can jump straight to an episode number in a long-running
+show. Its anidb.app request chain is modeled on
 [Pystardust's ani-cli](https://github.com/pystardust/ani-cli) — thanks to that project for
 figuring it out.
 
-Currently registered sources:
-
-- **[anidb.app](https://anidb.app)** (`ADB-1`) — Japanese audio only for now.
-- **[aniworld.to](https://aniworld.to)** (`AWT-1`) — a German aggregator; prefers German dub,
-  then German sub, then English sub, whichever is available first.
-
-`detail` (and the TUI's episode screen) shows a `Languages:` line listing what's available for
-a given anime — informational only for now, there's no way yet to pick a specific one.
-
-> **Note:** anidb.app sits behind a Cloudflare managed challenge. Requests are made with plain
-> `curl`, which is usually enough, but if Cloudflare starts blocking it for you, install a
+> **Note:** anidb.app sits behind a Cloudflare managed challenge; plain `curl` usually gets
+> through, but if it starts getting blocked, install a
 > [curl-impersonate](https://github.com/lexiforest/curl-impersonate) build (e.g.
-> `curl_chrome136`) and make sure it's on `PATH` — AniTUI will pick it up automatically and use
-> it instead, matching ani-cli's own fallback behavior. aniworld.to has no such gate.
+> `curl_chrome136`) on `PATH` and AniTUI will use it automatically. aniworld.to has no such
+> gate.
 
 ## Requirements
 
@@ -32,7 +31,20 @@ a given anime — informational only for now, there's no way yet to pick a speci
 
 ## Installation
 
-Build from source with [Cargo](https://rustup.rs/):
+**Prebuilt binaries** (Linux, macOS, Windows — x86_64 and aarch64 where applicable) are on the
+[Releases page](https://github.com/ShifuRain/ani-tui/releases/latest). Download the archive
+for your platform, then:
+
+```console
+# Linux / macOS
+$ tar xzf ani-tui-*.tar.gz
+$ sudo mv ani-tui-*/ani-tui /usr/local/bin/
+
+# Windows (PowerShell) — unzip, then move ani-tui.exe onto your PATH
+$ Expand-Archive ani-tui-*.zip
+```
+
+**From source**, with [Cargo](https://rustup.rs/):
 
 ```console
 $ git clone https://github.com/ShifuRain/ani-tui.git
@@ -42,54 +54,41 @@ $ cargo install --path .
 
 ## Usage
 
-Run `ani-tui` with no arguments for the interactive TUI: type a search, arrow through
-results, drill into an episode list, hit enter to play. `mpv` launches in the background, so
-the TUI stays interactive right away instead of freezing until it closes.
+Run `ani-tui` with no arguments for the TUI: type to search, arrow through results, drill into
+an episode list, hit enter to play. `mpv` launches in the background, so the TUI stays
+interactive right away.
 
 | Key | Action |
 | --- | --- |
 | type | edit the search box |
-| `enter` | search / select the highlighted item |
+| `enter` | search / select the highlighted item / play the selected episode |
 | `up`/`down`, `j`/`k` | navigate |
 | `down`/`tab` | move focus from the search box into results |
 | `/` | back to the search box |
+| `x` | toggle watched/unwatched on the selected episode |
+| `g` | jump to an episode by number (digits, `enter` to jump, `esc` to cancel) |
 | `esc`/`backspace` | back a screen |
 | `q` | quit (while not typing) |
 | `ctrl+c` | quit, from anywhere |
 
-For scripting, the same functionality is available as non-interactive subcommands. AniTUI
-identifies anime with an ID in the format `<source:id>`; `watch`/`ep-count`/`detail` need one
-from `search` first:
+The same functionality is available as non-interactive subcommands for scripting. Anime are
+identified by `<source:id>`; `watch`/`ep-count`/`detail` need one from `search` first:
 
 ```console
-$ ani-tui search "keywords"
+$ ani-tui search "keywords"        # lists titles with their IDs in <>
+$ ani-tui detail "<ID>"            # title, description, episode count, languages
+$ ani-tui ep-count "<ID>"          # just the title and episode count
+$ ani-tui watch "<ID>" 1           # plays episode 1 in mpv
 ```
 
-The output lists titles alongside their IDs in `<>`. Copy an ID to use in the other commands.
-
-```console
-$ ani-tui detail "<ID>"
-$ ani-tui ep-count "<ID>"
-```
-
-`detail` prints the most info about an anime: description, ID, episode count, and title.
-`ep-count` just prints the title and episode count.
-
-```console
-$ ani-tui watch "<ID>" 1
-```
-
-Watches an episode in mpv. Replace `<ID>` and `1` (the episode number) with your own values.
-
-Every command also accepts `-h`/`--help` for usage info, and `--version` prints the app version.
+Every command accepts `-h`/`--help`; `--version` prints the app version.
 
 ## Theming
 
-The interactive TUI reads an optional YAML config file from
-`$XDG_CONFIG_HOME/ani-tui/config.yml` (falls back to `~/.config/ani-tui/config.yml`) if
-present. Nothing is required — every field defaults on its own, so a config only needs to list
-what it wants to change. If the file exists but fails to parse, AniTUI prints a warning and
-falls back to the defaults shown below rather than refusing to start.
+The TUI reads an optional YAML config from `$XDG_CONFIG_HOME/ani-tui/config.yml` (falls back
+to `~/.config/ani-tui/config.yml`). Every field defaults on its own — only list what you want
+to change — and a broken file just prints a warning and falls back to defaults rather than
+refusing to start.
 
 ```yaml
 theme:
@@ -102,19 +101,22 @@ theme:
   selection_fg: "#1e1e2e" # text color of the selected row's highlight bar
   selection_bg: "#89b4fa" # background color of the selected row's highlight bar
   sources:                # per-source badge label/color, keyed by source prefix
-    ADB-1:
-      label: "AniDB"
-      color: "#a6e3a1"
-    AWT-1:
-      label: "AniWorld"
-      color: "#cba6f7"
+    ADB-1: { label: "AniDB", color: "#a6e3a1" }
+    AWT-1: { label: "AniWorld", color: "#cba6f7" }
 ```
 
-Colors accept `"#rrggbb"` hex, or any of ratatui's named colors (e.g. `"lightblue"`). Under
-`sources`, overriding just `label` or just `color` for a source keeps the other at its built-in
-default — you don't need to repeat both. Any source prefix not listed falls back to showing its
-raw prefix as the label and `muted` as the color, so a future third source still looks sane
-with zero config changes.
+Colors accept `"#rrggbb"` hex or any ratatui named color (e.g. `"lightblue"`). Overriding just
+`label` or just `color` on a source keeps the other at its built-in default. An unlisted source
+prefix falls back to the raw prefix as label and `muted` as color.
+
+## Watch history
+
+Watched/unwatched state lives at `$XDG_DATA_HOME/ani-tui/watched.jsonl` (falls back to
+`~/.local/share/ani-tui/watched.jsonl`), one line appended per change. AniTUI doesn't sync
+this anywhere itself — point Syncthing, Nextcloud, a dotfiles git repo, or rsync at the file to
+carry history between devices. Records resolve by timestamp, not file position, so even a
+naive concatenation of two devices' files works. It's read once at startup, not watched live,
+so the pattern is close-sync-reopen rather than using two devices at once.
 
 ---
 

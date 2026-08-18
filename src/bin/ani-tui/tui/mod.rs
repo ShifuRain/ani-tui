@@ -15,10 +15,15 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use tokio::sync::mpsc;
 
 use crate::config::Theme;
+use crate::watch_history::WatchHistory;
 use app::{App, AppEvent};
 
 /// Runs the interactive TUI until the user quits, then restores the terminal.
-pub async fn run(registry: Arc<Registry>, theme: Theme) -> io::Result<()> {
+pub async fn run(
+    registry: Arc<Registry>,
+    theme: Theme,
+    mut watch_history: WatchHistory,
+) -> io::Result<()> {
     install_panic_hook();
 
     enable_raw_mode()?;
@@ -27,7 +32,7 @@ pub async fn run(registry: Arc<Registry>, theme: Theme) -> io::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run_app(&mut terminal, registry, &theme).await;
+    let result = run_app(&mut terminal, registry, &theme, &mut watch_history).await;
 
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
@@ -51,8 +56,10 @@ async fn run_app(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     registry: Arc<Registry>,
     theme: &Theme,
+    watch_history: &mut WatchHistory,
 ) -> io::Result<()> {
     let mut app = App::new();
+    app.watched = watch_history.watched_ids();
     let (tx, mut rx) = mpsc::unbounded_channel::<AppEvent>();
     let mut events = EventStream::new();
 
@@ -75,7 +82,7 @@ async fn run_app(
             }
         }
 
-        dispatch_pending(&mut app, &registry, &tx);
+        dispatch_pending(&mut app, &registry, &tx, watch_history);
 
         if app.should_quit {
             break;
@@ -89,7 +96,12 @@ async fn run_app(
 
 /// Consumes any `pending_*` intents set by the last state update, spawning the corresponding
 /// network request (or launching mpv) in the background.
-fn dispatch_pending(app: &mut App, registry: &Arc<Registry>, tx: &mpsc::UnboundedSender<AppEvent>) {
+fn dispatch_pending(
+    app: &mut App,
+    registry: &Arc<Registry>,
+    tx: &mpsc::UnboundedSender<AppEvent>,
+    watch_history: &mut WatchHistory,
+) {
     if let Some(query) = app.pending_search.take() {
         let registry = Arc::clone(registry);
         let tx = tx.clone();
@@ -117,8 +129,12 @@ fn dispatch_pending(app: &mut App, registry: &Arc<Registry>, tx: &mpsc::Unbounde
         let tx = tx.clone();
         tokio::spawn(async move {
             let link = registry.watch_link(&id).await;
-            let _ = tx.send(AppEvent::WatchLinkResolved(link));
+            let _ = tx.send(AppEvent::WatchLinkResolved(id, link));
         });
+    }
+
+    if let Some((id, watched)) = app.pending_watch_history.take() {
+        watch_history.set_watched(&id, watched);
     }
 
     if let Some(link) = app.pending_mpv_link.take() {
@@ -126,14 +142,27 @@ fn dispatch_pending(app: &mut App, registry: &Arc<Registry>, tx: &mpsc::Unbounde
         if let Some(header_fields) = link.mpv_header_fields() {
             mpv.arg(format!("--http-header-fields={header_fields}"));
         }
+        // `null`, not `piped`: nothing ever reads these, and holding a `Child` open across a
+        // whole video's playback while its stdout/stderr pipe buffer fills up unread would
+        // block mpv the moment that buffer's full. `null` just discards the output instead —
+        // still keeps it off the TUI's own alternate-screen terminal.
         let spawned = mpv
             .arg(&link.url)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .spawn();
-        if spawned.is_err() {
-            app.error = Some("could not launch mpv: is it installed and on PATH?".to_string());
+        match spawned {
+            Ok(mut child) => {
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let _ = child.wait().await;
+                    let _ = tx.send(AppEvent::PlaybackFinished);
+                });
+            }
+            Err(_) => {
+                app.error = Some("could not launch mpv: is it installed and on PATH?".to_string());
+            }
         }
     }
 }

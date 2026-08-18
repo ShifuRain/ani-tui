@@ -2,7 +2,7 @@ use crate::anime_repo::{self, AnimeRepository, AnimeRepositoryError, WatchLink};
 use crate::websites::curl_client::{CurlClient, QueryError};
 use regex::Regex;
 use serde::Deserialize;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use QueryError::ParsingError;
 
@@ -91,14 +91,20 @@ impl AnimeRepository for AniWorld {
         let mut episodes = Vec::new();
         for season in seasons {
             let season_html = self.client.get(&season_url(slug, season), &[]).await?;
+            let titles = parse_episode_titles(&season_html);
             for number in parse_episode_numbers(&season_html, slug, season) {
-                let title = if season == 0 {
+                let base = if season == 0 {
                     format!("Film {number}")
                 } else {
                     format!("S{season:02} E{number:02}")
                 };
+                let title = match titles.get(&number) {
+                    Some(real_title) => format!("{base} — {real_title}"),
+                    None => base,
+                };
                 episodes.push(anime_repo::Episode {
                     title,
+                    number,
                     id: anime_repo::GlobalId {
                         prefix: REPR_PREFIX.to_string(),
                         raw: episode_raw_id(slug, season, number),
@@ -389,6 +395,26 @@ fn parse_episode_numbers(html: &str, slug: &str, season: u32) -> Vec<u32> {
     numbers.into_iter().collect()
 }
 
+/// Parses a season page's episode table into `episode_number -> real German title` (falls
+/// back to the plain "S01 E01"-style label when a number has no entry here). This is the same
+/// season page already fetched in [`AniWorld::list_eps`] for episode numbers — the titles
+/// live in a `<table>` with `class="seasonEpisodeTitle"` cells that a narrower earlier scrape
+/// of just the nav `<ul>` missed, so this needs no extra request. Split out so it can be
+/// tested against a fixture file without a network round-trip.
+fn parse_episode_titles(html: &str) -> HashMap<u32, String> {
+    let re = Regex::new(
+        r#"(?s)<meta itemprop="episodeNumber" content="(\d+)"\s*/>.*?<td class="seasonEpisodeTitle"><a[^>]*>\s*<strong>([^<]*)</strong>"#,
+    )
+    .unwrap();
+
+    re.captures_iter(html)
+        .filter_map(|cap| {
+            let number: u32 = cap[1].parse().ok()?;
+            Some((number, unescape_entities(cap[2].trim())))
+        })
+        .collect()
+}
+
 /// Classifies a language flag's combined `src`+`alt`+`title` text into one of our canonical
 /// labels, falling back to a `lang-<key>` placeholder for anything unrecognized. Sub-variants
 /// are checked before the plain dub case, since they also contain "german"/"deutsch".
@@ -572,6 +598,18 @@ mod tests {
         assert_eq!(
             parse_episode_numbers(html, "attack-on-titan", 1),
             vec![1, 2, 3]
+        );
+    }
+
+    #[test]
+    fn parses_episode_titles_fixture() {
+        let html = include_str!("../../tests/fixtures/aniworld-season.html");
+        let titles = parse_episode_titles(html);
+
+        assert_eq!(titles.len(), 3);
+        assert_eq!(
+            titles.get(&1),
+            Some(&"An dich in 2000 Jahren - Der Fall von Shiganshina, Teil 1".to_string())
         );
     }
 
